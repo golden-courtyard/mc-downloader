@@ -211,6 +211,15 @@ SHA256     本地 c3514bf0…274b == 官方 SHA256SUMS 同值  ✅
 
 ### 8.2 其他
 
+#### A. 已知代码缺口（按严重度，2026-10-21 依据文献复核）
+
+| 项 | 说明 |
+|---|---|
+| **完整性链缺口（三层）** | 依据 *Survivable Key Compromise in Software Update Systems*（CCS'10，被引 172）——软件更新必须认证**三类**信息：<br>① **内容层**：`version_manifest_v2.versions[].sha1` 与 `assetIndex.sha1/size` 官方都给了，我们的结构体没声明 → 白丢校验（改 3–4 行可补）<br>② **时效层（timeliness）**：**完全没有**。无版本号比较 ⇒ 攻击者塞一个旧 manifest，我们无从发现（回滚攻击）<br>③ **一致层（consistency）**：没有。无法发现"不同用户拿到不同版本"（split-view）<br>⚠️ **补两个 sha1 只修了①**，②③ 是设计级空白 |
+| **续传不带 `If-Range`** | `download.rs:527` 只发 `Range`，**无 ETag / Last-Modified 校验**。服务器上文件换了（MC 版本更新 / 镜像同步滞后 / CDN 缓存不一致）时，会把**旧前段 + 新后段**拼成一个跨版本的混合文件：有 sha1 能抓但要整文件重下；**`fetch` / `generic` 无 sha1 则静默交付坏文件**。<br>标准解法 `If-Range: <strong ETag>`：校验器变了让服务器回 200 全量，客户端从头下而不是拼接 |
+
+#### B. 协议与实现待办
+
 | 项 | 说明 |
 |---|---|
 | 断点状态持久化 | ✅ **已落地（v0.5，见 §11.4）**：位图旁挂 `<name>.part.state`，进程被杀后重跑只补缺口 |
@@ -220,6 +229,14 @@ SHA256     本地 c3514bf0…274b == 官方 SHA256SUMS 同值  ✅
 | CurseForge 格式 | 已能识别（`manifest.json`）并给出明确报错，未实现解析 |
 | Forge / NeoForge | 已能识别并报出要求版本，未实现（需跑官方 installer） |
 | 整合包多 URL | mrpack 的 `downloads[]` 是多 CDN 镜像，目前只取第一条、其余丢弃。要接得先测「按源分片」是否真比单源快 |
+
+#### C. 做对应功能时再读的参考
+
+| 场景 | 参考 | 为什么 |
+|---|---|---|
+| **T5.1 的 AIMD 阶跃** | *TheaterQ: A Qdisc for Dynamic Network Emulation*（2510.27057） | `tc del/add` 切换带宽**中间有间隙**，会污染测量。学术上已把「NetEm 静态参数」记为已知局限，TheaterQ 用 trace 文件驱动动态仿真解决。<br>**本项目先用轻量缓解**：段间留 2s 稳定期 + 只取段末 10s 统计，不引第三方 qdisc |
+| **多源调度** | *MDTP — An Adaptive Multi-Source Data Transfer Protocol*（2505.09597） | 自适应多源传输，与我们的 `--adaptive` + `mirrors` 同方向。等真的开始测多源时再读 |
+| 评估方法本身 | *Emulation vs Simulation*（2608.02095） | 拥塞控制类评估"性能取决于算法/传输栈/应用行为/测量过程的交互"——提醒我们**测出来的可能是环境不是代码** |
 
 ---
 
