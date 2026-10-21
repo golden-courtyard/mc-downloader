@@ -369,11 +369,11 @@ async fn one_split(
     } else {
         conns
     };
-    let sem = if opts.adaptive {
-        Some(Arc::new(tokio::sync::Semaphore::new(conns)))
-    } else {
-        None
-    };
+    // `cond.then(|| v)` 而不是 `if cond { Some(v) } else { None }`：
+    // 后者是在用控制流表达一个 Option 值，前者直接说「条件成立时才有这个值」。
+    let sem = opts
+        .adaptive
+        .then(|| Arc::new(tokio::sync::Semaphore::new(conns)));
 
     let retries = opts.retries;
     let mut handles = Vec::new();
@@ -411,37 +411,34 @@ async fn one_split(
             Ok::<_, anyhow::Error>(())
         }));
     }
-    let tuner = match &sem {
-        Some(sm) => {
-            let sm = sm.clone();
-            let pg2 = pg.clone();
-            let ceiling = workers;
-            Some(tokio::spawn(async move {
-                let mut last = pg2.done();
-                let mut last_delta = 0u64;
-                let mut tick = tokio::time::interval(Duration::from_secs(2));
+    // 同上：不是「有/无 semaphore 两种分支」，而是「有 semaphore 才派调参任务」
+    let tuner = sem.as_ref().map(|sm| {
+        let sm = sm.clone();
+        let pg2 = pg.clone();
+        tokio::spawn(async move {
+            let mut last = pg2.done();
+            let mut last_delta = 0u64;
+            let mut tick = tokio::time::interval(Duration::from_secs(2));
+            tick.tick().await;
+            loop {
                 tick.tick().await;
-                loop {
-                    tick.tick().await;
-                    let now = pg2.done();
-                    let delta = now.saturating_sub(last);
-                    last = now;
-                    if delta == 0 {
-                        continue;
-                    }
-                    let avail = sm.available_permits();
-                    if delta > last_delta && avail < ceiling {
-                        sm.add_permits(1);
-                    } else if delta < last_delta && avail > 1 {
-                        let take = (avail / 2).max(1);
-                        sm.forget_permits(take);
-                    }
-                    last_delta = delta;
+                let now = pg2.done();
+                let delta = now.saturating_sub(last);
+                last = now;
+                if delta == 0 {
+                    continue;
                 }
-            }))
-        }
-        None => None,
-    };
+                let avail = sm.available_permits();
+                if delta > last_delta && avail < workers {
+                    sm.add_permits(1);
+                } else if delta < last_delta && avail > 1 {
+                    let take = (avail / 2).max(1);
+                    sm.forget_permits(take);
+                }
+                last_delta = delta;
+            }
+        })
+    });
 
     // 位图落盘：每 2 秒快照一次。
     // 崩溃最多丢 2 秒的进度（重下几片），不值得为每一片做一次同步写。

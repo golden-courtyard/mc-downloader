@@ -33,3 +33,29 @@ strip = true
 #     flusher 再返回错误；abort 模式下那条分支永远走不到，续传状态也来不及落盘。
 #   · 本机沙箱拦 target/release 的写入，release 构建无法在本地验证（只有 CI 能跑），
 #     不加无法验证的运行时语义改动。
+
+# ── 语法 / 语言基线 ────────────────────────────────────────────────
+# edition 只是「允许」2024 的写法，下面的 lint 才让它变成「要求」。
+# 放在 Cargo.toml 而不是 lib.rs 的 `#![warn]`：一处声明，lib / bin / test / bench
+# 四个 target 同时生效，不会漏。
+[lints.rust]
+# 全仓不允许 unsafe。将来真要加（比如 mmap 或 SIMD），必须先改这里 —— 强制讨论一次。
+unsafe_code = "forbid"
+# 不退回 2021 语义：if-let 临时值作用域、尾部表达式 drop 顺序、RPIT 捕获等
+# 十几条迁移 lint 一起 deny。写出在 2021/2024 下行为不同的代码会直接编译失败。
+# priority = -1 是为了让下面单条 lint（默认 priority 0）能覆盖 group
+rust_2024_compatibility = { level = "deny", priority = -1 }
+# 2024 起的语法点：`gen` 等新关键字被当作标识符就直接报错
+keyword_idents_2024 = "deny"
+# 冗余的 `mut` / 未使用的结果必须处理，不能靠肉眼
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+# 防的是「用了比 rust-version 更新的 API」—— 基线要能自己守住，不能靠人记
+incompatible_msrv = "deny"
+# 下面几条是**推动现代写法**的，不是风格洁癖：
+manual_let_else = "warn"   # 促使 match -> let-else
+redundant_clone = "warn"
+needless_pass_by_value = "warn"
+
