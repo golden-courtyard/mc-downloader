@@ -38,6 +38,11 @@
 #   新（39765be 起）：  `[tune] act= budget= take= inflight= delta= last=`
 #   按位置切会在两版之间静默错列 —— 这正是批次 6 踩过的"报告整体错位一行"同族。
 #
+# ⚠ **两版的字段集合不同**：旧 5 个 token（含 `[tune]` 前缀）= 4 个键值对
+#   （act/avail/delta/last）；新 7 个 token = 6 个键值对（act/budget/take/inflight/delta/last）。
+#   ⇒ 解析**不能假设列数固定**，也**不能假设 `avail` 一定在**；
+#     而**输出 CSV 的列是固定 10 列**，某版没有的字段一律留空。
+#
 # ⚠ `avail` 在 `39765be` 之后**不存在了**（不是"暂时为空"）：adaptive 路径已改用
 #   budget 闸门，`Semaphore` 只在 `--adaptive=false` 时构造，permit 这个概念就没了。
 #   取而代之：
