@@ -2,6 +2,7 @@ mod download;
 mod fabric;
 mod manifest;
 mod modpack;
+mod piece;
 mod vanilla;
 mod version;
 
