@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::Path;
 
+use crate::download::DownloadOpts;
 use crate::version::Job;
 
 #[derive(Debug, Deserialize)]
@@ -19,17 +20,8 @@ struct Lib {
 
 /// 从 Fabric meta 拉 profile，把 json 落盘，并把它的 libraries 下好。
 /// 返回实例 id（fabric-loader-<loader>-<mc>）。
-pub async fn install(
-    mc: &str,
-    loader: &str,
-    root: &Path,
-    proxy: Option<&str>,
-    retries: u32,
-    concurrency: usize,
-    piece_conns: usize,
-    adaptive: bool,
-) -> Result<String> {
-    let client = crate::download::client(proxy)?;
+pub async fn install(mc: &str, loader: &str, root: &Path, opts: &DownloadOpts) -> Result<String> {
+    let client = crate::download::client(opts)?;
     let url = format!("https://<你的源>/v2/versions/loader/{mc}/{loader}/profile/json");
 
     let text = client
@@ -70,7 +62,7 @@ pub async fn install(
     }
 
     println!("[*] Fabric 库: {} 个", jobs.len());
-    crate::download::run(&jobs, root, proxy, retries, concurrency, piece_conns, adaptive).await?;
+    crate::download::run(&jobs, root, opts).await?;
 
     Ok(prof.id)
 }
