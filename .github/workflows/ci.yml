@@ -40,6 +40,11 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Test
+        env:
+          # 稀疏文件语义是 spec §5.3 的硬判据。CI 是 ext4 必然支持，
+          # 设此变量让「文件系统不支持稀疏」时的 SKIP 直接判失败 ——
+          # 否则 SKIP 在 cargo test 里等同 passed，这条防线形同虚设。
+          REQUIRE_SPARSE: "1"
         run: cargo test --all-targets --locked
 
       # 本地也跑得了（CARGO_TARGET_DIR 指到仓库外即可绕开沙箱的路径限制）。

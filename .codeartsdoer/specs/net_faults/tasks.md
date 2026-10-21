@@ -81,7 +81,10 @@
 
 - **输入**：design D8（离线预算）
 - **输出**：脚本 + 一份 `expected_sha1.txt`，含 16MB / 128MB / 1GB 三档的 sha1 常量
-- **要点**：内容规则 `bytes(i % 251)`，循环长度 16，与 `fakeorigin.py` 的生成逻辑**必须逐字一致**
+- **要点**：内容规则 **`bytes(i % 251)`，`i` 是全局字节偏移** —— 天然周期 251，**没有"循环长度"这一说**
+  （原写的"循环长度 16"是笔误，已删）。与 `fakeorigin.py` 必须用**同一个表达式**，不是"两边各算一遍"
+- **产物必须入库**：`expected_sha1.txt` 要进仓库。理由（D8）：
+  若每次跑场景才现生成，"生成脚本自己写错"与"常量"会**同时变**，离线比对的独立性就丢了
 - **验证**：
   ```bash
   bash expected_sha1.sh 16   # 独立于 fakeorigin 算出
@@ -99,13 +102,29 @@
      表现为「假源启动即退出」，且 `ss -tan` 只见 TIME-WAIT 不见 LISTEN，极易误判成残留进程
   2. **不得内置 sleep 限速**（限速只由 netem 施加，D3）
   3. `--verify <sha1>` 给出时自校验生成结果，不符即 `exit 1`（D8 的落地）
-- **验证**：
+- **验证（三步，缺一步就是「验过了但没验到」）**：
   ```bash
-  # 连起两次，第二次必须成功（验 SO_REUSEADDR）
-  python3 fakeorigin.py --size-mb 1 --port 8899 & sleep 1; kill %1
-  python3 fakeorigin.py --size-mb 1 --port 8899 && echo REUSE-OK
-  curl -r 0-99 -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8899/blob.bin   # 期望 206
+  # ① 制造服务端 TIME_WAIT —— 必须用 Connection: close 让**服务端先关**。
+  #    否则 TIME_WAIT 落在客户端临时端口，这条用例根本触发不到目标缺陷。
+  python3 fakeorigin.py --size-mb 1 --port 8899 & OPID=$!
+  sleep 1
+  curl -s -H 'Connection: close' -o /dev/null http://127.0.0.1:8899/blob.bin
+  kill "$OPID"; wait "$OPID" 2>/dev/null
+  ss -tan | grep -c ':8899.*TIME-WAIT'        # 期望 ≥1
+
+  # ② 对照：不开 SO_REUSEADDR 的裸 socket 必须 bind 失败
+  python3 -c "import socket; socket.socket().bind(('127.0.0.1',8899))"
+  # 期望 [Errno 98] Address already in use —— 证明 SO_REUSEADDR 是承重的，不是摆设
+
+  # ③ 第二轮必须成功。⚠️ 不要写 `... && echo REUSE-OK`：
+  #    服务是常驻 serve_forever()，`&&` 后面的命令**永远不执行**
+  python3 fakeorigin.py --size-mb 1 --port 8899 & OPID=$!
+  for _ in $(seq 50); do (echo >/dev/tcp/127.0.0.1/8899) 2>/dev/null && break; sleep 0.1; done
+  kill -0 "$OPID" && echo REUSE-OK
+  curl -r 0-99 -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8899/blob.bin   # 206
+  kill "$OPID"
   ```
+  ⚠️ 两个环境坑：**不要用裸 `wait`**（会连常驻假源一起等，ssh 挂死）；**不要用 `/usr/bin/time`**（VM 上没有，只有 shell 内建 `time`，计时用 `date +%s%N`）。
 
 ### T0.6 假源自测
 
@@ -137,12 +156,17 @@
 ### T1.1 `tests/linux_semantics.rs`
 
 - **输入**：design §7 的**五条**判据
-- **输出**：5 个测试，全部 `#[cfg(target_os = "linux")]`
+- **输出**：5 个测试；**用文件级 `#![cfg(target_os = "linux")]`** —— 逐项挂 `#[cfg]` 会让 Windows 上
+  `unused_imports` 撞 CI 的 `-D warnings`，文件级更干净，效果等价
 - **要点**：
   - **不打桩**，落真实文件系统（design §6）
-  - 第 2 条 `sparse_set_len`：设 `REQUIRE_SPARSE=1` 时 SKIP 即 fail（CL-03）
-  - 第 5 条 `fd_under_concurrency`：**驱动真实下载**（`--concurrency 64`），不是测本机 fd 上限
+  - 第 2 条 `sparse_set_len`：设 `REQUIRE_SPARSE=1` 时 SKIP 即 fail。**CI 已在 Test 步设该变量**（ci.yml）
+  - 第 5 条 `fd_under_concurrency`：**驱动真实并发下载** —— 必须 `run --parallel` + 64 个 task。
+    **`fetch` 路径并发度恒为 1**（只造 1 个 job，`buffer_unordered` 作用在 1 个任务上），用它判据会空转
 - **验证**：`cargo test --test linux_semantics` → Linux 上 5 passed
+- ⚠️ **别在注释里写「Windows 上这几条不成立」**：实测 NTFS 上 `rename` 覆盖已存在文件、
+  「删除打开中的文件」**都能过**，真正不成立的只有**大小写敏感**（判据 1，实测建 `A`/`a` 后目录只剩 1 条）。
+  `cfg(linux)` 的作用是**守住 Linux 侧语义判据**，不是"Windows 会失败"。
 
 ### T1.2 本地确认分流
 

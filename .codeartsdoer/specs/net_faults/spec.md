@@ -176,7 +176,7 @@
 | 对 1GB 文件 `set_len` 后立刻查磁盘占用 | the 占用 shall ≈ 0（稀疏文件生效）；**若文件系统不支持稀疏，脚本 shall 明确报「本环境不支持」而非静默通过** |
 | `.part` 存在时 `rename` 覆盖同名成品 | the `rename` shall 原子成功（POSIX 语义）|
 | 打开中的 `.part` 尝试删除 | the 删除 shall 成功（Linux 允许），且不残留句柄泄漏 |
-| `--concurrency 64` 下的 fd 消耗 | When 以 `--concurrency 64` 跑一次**真实下载**，the **mc-downloader 进程** shall 不因 `EMFILE` 失败；若失败，shall 在错误信息中点明 fd 上限。（**禁止**用「探测本机 fd 上限」替代 —— 那测的是环境属性，与"工具在并发下是否健壮"没有因果关系）|
+| `--concurrency 64` 下的 fd 消耗 | When 以 `--concurrency 64` 跑一次**真实并发下载**，the **mc-downloader 进程** shall 不因 `EMFILE` 失败；若失败，shall 在错误信息中点明 fd 上限。<br>⚠️ **必须用 `run --parallel` + 64 个 task**，**不能用 `fetch`** —— `fetch` 只构造 1 个 job，`buffer_unordered(concurrency)` 作用在 1 个任务上，**并发度恒为 1**，判据会空转成"永远绿"。<br>⚠️ **禁止**用「探测本机 fd 上限」替代 —— 那测的是环境属性，与"工具在并发下是否健壮"没有因果关系 |
 
 ### 5.4 时变带宽（AIMD）
 

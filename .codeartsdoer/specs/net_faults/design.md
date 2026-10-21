@@ -276,8 +276,8 @@ FAIL l2p_loss_20 rc=143 timeout=120s part_state=present(expect=absent)
 | 1 | `case_sensitive_paths` | 建 `A` 与 `a`，`exists()` 各自为真、内容不同 | 5.3 |
 | 2 | `sparse_set_len` | `set_len(1GB)` 后 `blocks()*512` ≪ 1GB；fs 不支持稀疏时输出 `SKIP` 并**在 CI 上报失败**（`REQUIRE_SPARSE=1`）| 5.3 |
 | 3 | `rename_overwrites` | A 存在时 `rename(B, A)` 成功且内容是 B 的 | 5.3 |
-| 4 | `unlink_open_file` | 打开句柄后 `remove_file` 成功，**且删除后原句柄仍可读**（`/proc/self/fd` 计数不增长）| 5.3 |
-| 5 | `fd_under_concurrency` | **驱动真实下载**：以 `--concurrency 64` 跑一次假源下载，断言 `mc-downloader` 不因 `EMFILE` 失败；失败则错误信息须点明 fd 上限 | 5.3 |
+| 4 | `unlink_open_file` | 打开句柄后 `remove_file` 成功，**且删除后原句柄仍能读出完整内容**、`metadata().len()` 未失效。（**不做** `/proc/self/fd` 计数断言：`cargo test` 多线程共用进程，计数受其它测试干扰，硬断言必 flaky）| 5.3 |
+| 5 | `fd_under_concurrency` | **驱动真实并发下载**：`run --parallel` + **64 个 task**（**`fetch` 路径并发度恒为 1，不能用** —— 只造 1 个 job，`buffer_unordered` 作用在 1 个任务上）。断言不因 `EMFILE` 失败；失败则错误信息须点明 fd 上限 | 5.3 |
 
 > **第 5 条的修订理由（审计 F-05）**：原设计写的是「开 N 个文件直到失败，记录上限」——
 > 那测的是**本机 fd 上限**（环境属性），与「工具在并发 64 时是否健壮」没有因果关系。
