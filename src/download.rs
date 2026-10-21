@@ -220,11 +220,11 @@ async fn one(
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    if let Some(size) = job.size {
-        if size >= SPLIT_THRESHOLD {
-            one_split(client, job, &dst, size, opts, pg).await?;
-            return Ok((job.path.clone(), false));
-        }
+    if let Some(size) = job.size
+        && size >= SPLIT_THRESHOLD
+    {
+        one_split(client, job, &dst, size, opts, pg).await?;
+        return Ok((job.path.clone(), false));
     }
 
     one_stream(client, job, &dst, pg).await?;

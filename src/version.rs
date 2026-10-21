@@ -138,16 +138,16 @@ pub async fn collect(client: &reqwest::Client, v: &VersionJson) -> Result<Vec<Jo
         let Some(d) = &lib.downloads else { continue };
 
         // 主 jar
-        if let Some(a) = &d.artifact {
-            if let Some(p) = a.path.clone() {
-                jobs.push(Job {
-                    url: a.url.clone(),
-                    path: format!("libraries/{p}"),
-                    sha1: a.sha1.clone(),
-                    size: a.size,
-                    mirrors: Vec::new(),
-                });
-            }
+        if let Some(a) = &d.artifact
+            && let Some(p) = a.path.clone()
+        {
+            jobs.push(Job {
+                url: a.url.clone(),
+                path: format!("libraries/{p}"),
+                sha1: a.sha1.clone(),
+                size: a.size,
+                mirrors: Vec::new(),
+            });
         }
 
         // ⭐ native 库（Windows）：旧版本（1.7.x / 1.12.x）必需，缺了启动会报 lwjgl.dll
@@ -157,16 +157,16 @@ pub async fn collect(client: &reqwest::Client, v: &VersionJson) -> Result<Vec<Jo
                 "natives-windows-64",
                 "natives-windows-arm64",
             ] {
-                if let Some(nat) = cls.get(key) {
-                    if let Some(p) = nat.path.clone() {
-                        jobs.push(Job {
-                            url: nat.url.clone(),
-                            path: format!("libraries/{p}"),
-                            sha1: nat.sha1.clone(),
-                            size: nat.size,
-                            mirrors: Vec::new(),
-                        });
-                    }
+                if let Some(nat) = cls.get(key)
+                    && let Some(p) = nat.path.clone()
+                {
+                    jobs.push(Job {
+                        url: nat.url.clone(),
+                        path: format!("libraries/{p}"),
+                        sha1: nat.sha1.clone(),
+                        size: nat.size,
+                        mirrors: Vec::new(),
+                    });
                 }
             }
         }

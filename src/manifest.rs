@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::Deserialize;
 
 const URL: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
