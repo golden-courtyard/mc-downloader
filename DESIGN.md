@@ -31,7 +31,7 @@
 
 | DeepInfer / DeepSpec 机制 | 迁移到下载器 | 落点 |
 |---|---|---|
-| **PagedAttention + BlockManager** | **固定大小分片 + 位图状态表** | `piece.rs` |
+| **PagedAttention 的「固定大小块」** | **固定大小分片 + 按片管理** | `piece.rs` |
 | **Continuous batching** | **全局分片队列，新任务随时插入** | `scheduler.rs` |
 | **EPLB（专家负载均衡）** | **多镜像按实测吞吐分配分片** | `source.rs` |
 | **chunked prefill** | **大文件 Range 分片** | `download.rs` |
@@ -39,6 +39,21 @@
 | ~~KV cache 压缩 / 投机解码~~ | ❌ 不迁移 | 与下载无关 |
 
 **核心判断**：LLM 推理与下载器同构的地方是「**把大任务切小、动态调度、平衡负载**」，不同构的是 GPU 相关的全部机制。
+
+> ⚠️ **2026-10-21 核对源码后修正（原文写错了）**
+>
+> 原文这条写的是「PagedAttention + **BlockManager** → 固定大小分片 + **位图状态表**」。
+> 实际读 `DeepInfer/csrc/engine/block_manager.hpp`：
+> `struct Blocks` 是**双向链表 free list**（`prev`/`next`/`_head`/`_tail`）+ **`ref_count`**
+> （支持跨 sequence 共享同一块），**不是位图**。
+>
+> 我们的 `PieceTable` 是位图，只记「哪片完成」——**比它简单，因为不需要共享、不需要分配顺序**。
+>
+> ⇒ **借的是「固定大小块」这个概念，不是它的数据结构。**
+> 把「概念借用」写成「结构移植」，是**把类比当成了移植**。
+>
+> 另外三条（Continuous batching / EPLB / chunked prefill）**本轮未逐条核对源码**，
+> 引用时按同样标准重新验。
 
 ---
 
@@ -217,7 +232,7 @@ SHA256     本地 c3514bf0…274b == 官方 SHA256SUMS 同值  ✅
 |---|---|
 | **完整性链缺口（三层）** | 依据 *Survivable Key Compromise in Software Update Systems*（CCS'10，被引 172）——软件更新必须认证**三类**信息：<br>① **内容层**：`version_manifest_v2.versions[].sha1` 与 `assetIndex.sha1/size` 官方都给了，我们的结构体没声明 → 白丢校验（改 3–4 行可补）<br>② **时效层（timeliness）**：**完全没有**。无版本号比较 ⇒ 攻击者塞一个旧 manifest，我们无从发现（回滚攻击）<br>③ **一致层（consistency）**：没有。无法发现"不同用户拿到不同版本"（split-view）<br>⚠️ **补两个 sha1 只修了①**，②③ 是设计级空白 |
 | **续传不带 `If-Range`** | `download.rs:527` 只发 `Range`，**无 ETag / Last-Modified 校验**。服务器上文件换了（MC 版本更新 / 镜像同步滞后 / CDN 缓存不一致）时，会把**旧前段 + 新后段**拼成一个跨版本的混合文件：有 sha1 能抓但要整文件重下；**`fetch` / `generic` 无 sha1 则静默交付坏文件**。<br>标准解法 `If-Range: <strong ETag>`：校验器变了让服务器回 200 全量，客户端从头下而不是拼接 |
-| **`--adaptive` 的 MD（减半）分支疑似死代码**<br>⚠️ **待 T5.2 实测确认** | `download.rs:365-376`：`workers = 2×conns`，而 `Semaphore::new(conns)` ⇒ 只要有片可下，**所有 permit 都被 worker 持有**，`available_permits()` **恒为 0**。<br>而 `:436` 的分支要求 `delta < last_delta && **avail > 1**` ⇒ **永不触发**。<br>⇒ tuner 实际是「**只增不减**」，不是 AIMD：`avail < workers`（= 2×conns）恒成立，所以只要吞吐上升就 `add`。<br>**修法方向**：减半条件不应依赖 `avail`，改成「当前并发 > 1」（有减的余地）即可。<br>**本 feature 不修**（net_faults 是测试设施，改 tuner 逻辑是另一个任务）—— 但 T5.2 若实测 `act=cut` 出现 **0 次**，即坐实此缺陷 |
+| **`--adaptive` 的减半分支在**高并发**下不可达**<br>✅ **已实测（2026-10-21）** | 实测（1GB / 8mbit / adaptive / 25s 窗口，**只改 `--piece-conns`**）：<br><br>| conns | tune 行数 | add | **cut** | max(avail) |<br>|---|---|---|---|---|<br>| **1** | 12 | 6 | **4** | 2 |<br>| **2** | 10 | 6 | **3** | 2 |<br>| 4 | 9 | 6 | **0** | 1 |<br>| **16** | 9 | 5 | **0** | 0 |<br><br>⚠️ **这不是「死代码」**（conns=1/2 时 cut 正常工作）。准确结论：<br>`cut` 需要 `avail > 1`，即 `permits > 2×conns + 1`；而 `permits` 从 `conns` 起、每 2s 才 +1 ⇒ **25s 窗口内要 `conns < 11` 才够**。<br>⇒ **并发越高，减半越不可达 —— 而高并发恰恰是最需要减半的场景。**<br>**修法方向**：减半条件不应依赖 `avail`（它衡量"有多少空闲许可"，与"该不该减"无关），改成「当前并发 > 1」。 |
 
 #### B. 协议与实现待办
 
