@@ -13,11 +13,27 @@
 #
 #   | 臂 | 参数 | 命题 | 现判据 |
 #   | A | --piece-conns 1  | AIMD **双向**有效（机制存在）| cut ≥ 1、add ≥ 1、seg2 ∈ ±20%、seg3 > 2×seg2 |
-#   | B | --piece-conns 16 | 高并发回归（真实场景）      | add ≥ 1、seg3 > 2×seg2；cut/seg2/zero2 仅诊断 |
+#   | B | --piece-conns 16 | 高并发+慢链路 ⇒ **应退回固定并发并告警**（39765be 的守卫）| 告警 1 次且含 coarse_grain；disabled ≥ 1；add=0 且 cut=0；seg3 > 2×seg2 |
 #   | C | 16 连 + --adaptive=false | 对照（钩子确实没在跑）| tune 行 = 0；seg2/max 仅诊断 |
 #
 #   ⚠ **A 臂的 `cut ≥ 1` 依赖流量抖动**：`cut` 的条件是 `delta < last_delta`。
 #      恒定速率源（delta 每 tick 精确相等）会一直走 `hold` ⇒ **cut = 0**。
+#
+#   ⚠ **守卫是「一次性判定，只看起步速率」**（39765be 起）：
+#       `piece_secs = piece_size × conns ÷ 总吞吐`，> 3 个 2s tick（6s）就
+#       `act=disabled reason=coarse_grain` 并退回固定并发，此后不再 add/cut。
+#       · 起步快、后段降速的（A 臂：起步 80mbit 通过，8mbit 段单片 16s）⇒ 守卫**不复查**，仍跑 AIMD
+#       · 起步慢的（B 臂：16MB 片 × 16 连 @80mbit = **25.6s**）⇒ 一开始就退回
+#       这是有意的取舍（避免段中途翻转），**不是缺陷**。
+#
+#       门槛参考（16 连）：16MB 片（≥256MB 素材）需总带宽 ≈ **380 mbit**
+#         （标称算出来是 340，实测有效吞吐比标称低约 12% ⇒ 340~380 之间会出现"文档说够、实际退回"）
+#       4MB 片（8–256MB 素材）≈ 85 mbit。
+#       ⚠ 素材大小决定片大小：本场景用 1GB ⇒ **16MB/片**，别按 4MB 估。
+#
+#   ⚠ **`[tune]` 行格式也随 39765be 变了**：旧 `act= avail= delta= last=`，
+#       新 `act= budget= take= inflight= delta= last=`（`avail` 在新架构里**不存在**）。
+#       `trace_rows.sh` 按**字段名**匹配，两版都能解析；CSV 列已同步为 budget/take/inflight。
 #      实测：1 MB/s 恒定源 cut=0；同一源加 ±50% 抖动后 cut=1。
 #      ⇒ **用恒定源复跑 A 臂会看到 cut=0，那不是回归**，是测法丢掉了触发条件。
 #
@@ -158,10 +174,11 @@ arm_stats() {
             if ($4 == "add") na++
             if ($4 == "cut") nc++
             if ($4 == "hold") nh++
+            if ($4 == "disabled") ndis++
         }
         END {
-            printf "seg1=%.0f seg2=%.0f seg3=%.0f max=%.0f tune=%d add=%d cut=%d hold=%d zero2=%d n2=%d\n",
-                   (n1 ? s1/n1 : 0), (n2 ? s2/n2 : 0), (n3 ? s3/n3 : 0), mx, nt, na, nc, nh, z2, n2
+            printf "seg1=%.0f seg2=%.0f seg3=%.0f max=%.0f tune=%d add=%d cut=%d hold=%d disabled=%d zero2=%d n2=%d\n",
+                   (n1 ? s1/n1 : 0), (n2 ? s2/n2 : 0), (n3 ? s3/n3 : 0), mx, nt, na, nc, nh, ndis, z2, n2
         }' "$1"
 }
 
@@ -180,12 +197,13 @@ check_aimd() {
     b="$(arm_stats "$OUT/logs/aimd_b.csv")"
     c="$(arm_stats "$OUT/logs/aimd_c.csv")"
 
-    local a_seg2 a_seg3 a_add a_cut b_seg2 b_seg3 b_add b_cut b_zero2 b_n2 c_seg2 c_max c_tune
+    local a_seg2 a_seg3 a_add a_cut b_seg2 b_seg3 b_add b_cut b_zero2 b_n2 b_disabled c_seg2 c_max c_tune
     a_seg2="$(get seg2 "$a")"; a_seg3="$(get seg3 "$a")"
     a_add="$(get add "$a")";   a_cut="$(get cut "$a")"
     b_seg2="$(get seg2 "$b")"; b_seg3="$(get seg3 "$b")"
     b_add="$(get add "$b")";   b_cut="$(get cut "$b")"
     b_zero2="$(get zero2 "$b")"; b_n2="$(get n2 "$b")"
+    b_disabled="$(get disabled "$b")"
     c_seg2="$(get seg2 "$c")"; c_max="$(get max "$c")"; c_tune="$(get tune "$c")"
 
     # A：机制双向有效
@@ -196,16 +214,46 @@ check_aimd() {
         ok=1; detail+="A:seg2=${a_seg2}(expect ${lo}~${hi}) "
     else detail+="A:seg2=$a_seg2 "; fi
     # A：升速段上升
+    # ⚠ A 臂 seg2 测的是「**还能调**」，不是「**调得准**」：
+    #   守卫是"一次性判定，只看起步速率" —— 起步 80mbit 时单片 1.6s < 6s 通过，
+    #   降到 8mbit 段后单片要 16s（远超 6s），但守卫**不复查**，AIMD 照常 add/cut。
+    #   ⇒ 那 95% 的收敛是在"调节粒度其实已不足"的前提下得到的，别把它读成"收敛精度好"。
     if (( a_seg3 <= a_seg2 * 2 )); then
         ok=1; detail+="A:seg3=${a_seg3}(expect>2x seg2) "
     else detail+="A:seg3=$a_seg3 "; fi
 
-    # B：高并发回归 —— 只判「add≥1 且升速段显著高于降速段」。
-    # 不判「降速段均值 ±20%」：实测该窗口是**双峰信号**（7.5M → 4.2M → 0 → 0 → 2.5M），
-    # 均值 6.31M(79%) 是双峰的平均，拿 ±20% 判它没有意义；暂停数（zero2）写进 detail
-    # 作为待查现象的量化证据，不在这里判死。
-    if (( b_add < 1 )); then ok=1; detail+="B:add=0(expect>=1) "; else detail+="B:add=$b_add "; fi
-    detail+="B:cut=$b_cut B:seg2=$b_seg2 B:zero2=$b_zero2/$b_n2 "
+    # B：高并发 + 慢链路 ⇒ 应**退回固定并发并告警**（39765be 起的守卫行为）。
+    #
+    # 判据变更记录（必须留死因）：
+    #   原判据「add ≥ 1」在 1GB 素材（16MB 片）+ 16 连 + 80mbit 下**不可能满足** ——
+    #   单片 25.6s > 守卫阈值 6s ⇒ 首个 delta 就 act=disabled 并 return，此后 add/cut 恒为 0。
+    #   ⇒ 在那个组合下 AIMD **数学上就没有对象可调**，"该不该 cut"是一条没有对象的判据。
+    #   ⇒ 改成测**守卫本身是否按设计生效**。
+    #
+    # ⚠ 反向断言（防"因为退回所以没 cut"被读成"因为坏了所以没 cut"）：
+    #   cut=0 时判定行必须同时出现 disabled=1 —— 否则两种情形在报告里长得一样。
+    local b_raw="$OUT/logs/aimd_b.csv.raw"
+    local b_warn=0 b_coarse=0
+    if [[ -f "$b_raw" ]]; then
+        b_warn="$(grep -c '^\[adaptive\]' "$b_raw" 2>/dev/null)" || b_warn=0
+        grep -q 'reason=coarse_grain' "$b_raw" && b_coarse=1
+    fi
+    [[ "$b_warn" =~ ^[0-9]+$ ]] || b_warn=0
+
+    if (( b_warn != 1 )); then
+        ok=1; detail+="B:adaptive_warn=${b_warn}(expect 1) "
+    else detail+="B:adaptive_warn=1 "; fi
+    if (( b_coarse != 1 )); then
+        ok=1; detail+="B:reason=?(expect coarse_grain) "
+    else detail+="B:reason=coarse_grain "; fi
+    # 退回后：必须有 disabled 行，且 add/cut 都为 0
+    if (( b_disabled < 1 )); then
+        ok=1; detail+="B:disabled=0(expect>=1) "
+    else detail+="B:disabled=$b_disabled "; fi
+    if (( b_add != 0 || b_cut != 0 )); then
+        ok=1; detail+="B:add=$b_add,cut=$b_cut(expect 0/0：已退回固定并发) "
+    else detail+="B:add=0 B:cut=0 "; fi
+    detail+="B:seg2=$b_seg2 B:zero2=$b_zero2/$b_n2 "
     if (( b_seg2 <= 0 )); then
         ok=1; detail+="B:seg2=0(无数据) "; fi
     if (( b_seg3 <= b_seg2 * 2 )); then
