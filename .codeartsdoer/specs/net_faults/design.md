@@ -184,6 +184,26 @@ scripts/net_faults/
 > 极易误判成"有残留进程"。
 > **14 个场景连跑 + `--repeat 3` 时这必然发作**，且是随机 flake。
 
+> ⚠️⚠️ **`request_queue_size` 必须 ≥ 场景最大并发数**（stdlib 默认只有 **5**）。
+> 不设的话，>5 条同时连接会让 listen 队列溢出 → **SYN 被丢** → 客户端按 RTO 退避重传（1s、2s）
+> → **整个传输被 SYN 重传主导**。
+>
+> 实测（Kali VM，128MB × 32 连，各跑 3 次；判据是内核 `ListenOverflows` 增量）：
+>
+> | 变体 | 峰值 ESTAB | `ListenOverflows` | 耗时 |
+> |---|---|---|---|
+> | `request_queue_size=5`（默认）| 9 / 8 / 9 | **+42 / +35 / +29** | **2141 / 2100 / 2104 ms** |
+> | `request_queue_size=128` | 25 / 24 / 24 | **0 / 0 / 0** | **156 / 129 / 108 ms** |
+>
+> 差 **7–8 倍**。负向对照（16MB × 4 连，4 ≤ 5）：`+0` —— 证明计数器只在**真溢出**时增加。
+>
+> **后果不止"并发爬不满"**：任何 >5 连的测量都会被污染 ——
+> 吞吐被 SYN 重传主导、耗时翻倍、**AIMD 阶跃窗口被吃掉**（T5.1 每段才 25s，2–3s 的重传就占 1/10）。
+> 而且**归因会指向被测程序**：假源把「源端排队」伪装成「客户端慢」，正是 D3 要排除的那种失真。
+>
+> **取值 128**：`net.core.somaxconn = 4096`，不会被内核截断；我们最大并发 64（`--piece-conns` 与 `--parallel`），
+> 留一倍余量。再往上只是内核队列内存，没有行为收益。
+
 **跨任务的自定义 CLI 必须在这里写死**（`start_origin` 与 `fakeorigin.py` 分属两个任务，
 若不书面约定，两边必然各造一套参数名）。当前约定：
 `--size-mb <N>` · `--port <P>` · `--verify <sha1>`（可选）。
@@ -317,6 +337,7 @@ FAIL l2p_loss_20 rc=143 timeout=120s part_state=present(expect=absent)
 | `netem loss/reorder/duplicate/rate/delay` | ✅ 可挂载 | `tc qdisc add dev lo root netem loss 5%` 成功 |
 | **`iptables --reject-with tcp-reset`** | ✅ 可建 **⚠️ 删除需完整 spec** | 见 D2 rev3 后半；按行号删亦可行 |
 | 磁盘 | ✅ 51G 可用 | `df -h /home` |
+| **假源 listen backlog** | ⚠️ **必须 ≥ 场景最大并发（取 128）** | stdlib 默认 5 会丢 SYN → RTO 重传 → 耗时差 7–8 倍。实测与取值依据见 §2.2 |
 
 **结论：批次 2 全部解除，L2/L2′ 可以开工。**
 唯一遗留是 T2.3（VM 内装 Rust），不阻塞批次 3 之外的准备工作。
