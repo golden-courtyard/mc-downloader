@@ -3,7 +3,6 @@
 //! 设计参照 DeepInfer 的 block table（`csrc/engine/block_manager.hpp`）
 //! 与 aria2 的 `min-split-size`：**小文件不分片**。
 
-use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -23,7 +22,6 @@ pub struct PieceTable {
     total: u32,
     /// 每 bit 一片：0 未完成 / 1 完成
     bitmap: Vec<u64>,
-    inflight: HashSet<u32>,
 }
 
 impl PieceTable {
@@ -45,7 +43,6 @@ impl PieceTable {
             piece_size,
             total,
             bitmap: vec![0u64; words],
-            inflight: HashSet::new(),
         }
     }
 
@@ -84,24 +81,16 @@ impl PieceTable {
         self.bitmap[w] & (1u64 << b) != 0
     }
 
-    pub fn mark_inflight(&mut self, idx: u32) {
-        if idx < self.total {
-            self.inflight.insert(idx);
-        }
-    }
-
+    /// 标记一片完成。
+    ///
+    /// 「哪片正在下载」不由本表记录 —— 那些片段还在 `PieceScheduler` 的队列里，
+    /// 队列本身就是 in-flight 集合。这里只管终态。
     pub fn mark_done(&mut self, idx: u32) {
         if idx >= self.total {
             return;
         }
         let (w, b) = ((idx / 64) as usize, idx % 64);
         self.bitmap[w] |= 1u64 << b;
-        self.inflight.remove(&idx);
-    }
-
-    /// 失败时退回 Pending（从 inflight 移除，位图不变）
-    pub fn release(&mut self, idx: u32) {
-        self.inflight.remove(&idx);
     }
 
     pub fn all_done(&self) -> bool {
@@ -286,7 +275,6 @@ mod tests {
         assert!(!t.all_done());
         for i in 0..t.total() {
             assert!(!t.is_done(i));
-            t.mark_inflight(i);
             t.mark_done(i);
             assert!(t.is_done(i));
         }
@@ -301,15 +289,6 @@ mod tests {
         let t = PieceTable::new(256 * 1024 * 1024);
         assert_eq!(t.total(), 64);
         assert!(!t.all_done());
-    }
-
-    #[test]
-    fn release_returns_to_pending() {
-        let mut t = PieceTable::new(10 * 1024 * 1024);
-        t.mark_inflight(0);
-        t.release(0);
-        assert!(!t.is_done(0));
-        assert!(t.pending().contains(&0));
     }
 
     /// 每个用例独立的临时 `.part` 路径

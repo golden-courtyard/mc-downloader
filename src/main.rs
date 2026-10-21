@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 #[derive(Parser)]
 #[command(
     name = "mc-downloader",
+    version,
     about = "从 Mojang 官方 CDN 下载 Minecraft，或安装整合包"
 )]
 struct Args {

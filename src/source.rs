@@ -146,11 +146,11 @@ mod tests {
         let p = pool();
         // b 报 100 MB/s，a 报 1 MB/s
         p.record_success(1, 100 * 1048576, 1.0);
-        p.record_success(0, 1 * 1048576, 1.0);
+        p.record_success(0, 1048576, 1.0);
         // 反复采样，让 ewma 收敛
         for _ in 0..5 {
             p.record_success(1, 100 * 1048576, 1.0);
-            p.record_success(0, 1 * 1048576, 1.0);
+            p.record_success(0, 1048576, 1.0);
         }
         assert_eq!(p.pick(), 1, "应该挑更快的 b");
     }

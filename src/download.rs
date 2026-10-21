@@ -313,11 +313,13 @@ async fn one_split(
     }
 
     // 预分配（稀疏文件），保证后续按偏移写不越界。
-    // **不能 `File::create`**：那会在续传时把已下好的内容截断清零。
+    // `truncate(false)` 是**刻意**的：续传时文件里已有已下好的内容，
+    // 截断会把它清掉，接下来只写缺口就会拼出一个前段全零的坏文件。
     {
         let f = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
+            .truncate(false)
             .open(&tmp)
             .with_context(|| format!("打开临时文件失败: {}", tmp.display()))?;
         if f.metadata()?.len() != size {
