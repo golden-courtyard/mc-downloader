@@ -344,7 +344,8 @@ fn unlink_open_file() {
 /// 1. **`fetch` 路径下 `--concurrency 64` 是空转。** `fetch` 只构造**一个** job，
 ///    `download::run` 里是 `buffer_unordered(opts.concurrency)` 作用在 1 个 job 上
 ///    ⇒ 并发度恒为 1。用它断言「不因 EMFILE 失败」必然永远绿，测不到任何东西。
-///    所以拆成两段：**阶段 A** 跑 spec 原文那条命令（当 CLI 形态的 smoke），
+///    所以拆成两段：**阶段 A** 跑 spec 原文那条命令（只当 CLI 形态的 smoke：
+///    1 MiB 不分片 ⇒ 1 片 1 连接，**本身零压强**），
 ///    **阶段 B** 用 `run --parallel` + 64 个 task，**真的 64 个文件同时下** ——
 ///    触发条件（并发 64）与判据（不因 fd 耗尽失败）才对得上因果关系。
 /// 2. **`ulimit -n 256` 路线被否。** 压低上限测的是「环境分给多少 fd」，
@@ -375,6 +376,9 @@ fn fd_under_concurrency() {
     let bin = env!("CARGO_BIN_EXE_mc-downloader");
 
     // ── 阶段 A：spec 原文的形态（单文件 fetch，64 并发）──
+    // **这条不产生 fd 压力**：1 MiB < 8 MB 阈值 ⇒ 不分片 ⇒ 1 片 1 连接，
+    // `--concurrency` 在单 job 上也恒为 1。它只证明「spec 原文那条命令不崩、内容对」。
+    // **fd 压力由阶段 B 承担** —— 谁要降阶段 B 的规模，先回来读这两行。
     let out_a = Command::new(bin)
         .args(["--concurrency", "64", "fetch"])
         .arg(&url)
