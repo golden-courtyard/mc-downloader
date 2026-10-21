@@ -13,6 +13,7 @@
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
@@ -25,6 +26,8 @@ pub const API_BASE: &str = "https://api.curseforge.com";
 pub const BATCH_SIZE: usize = 50;
 /// 批间间隔：免费 key 有配额（§14.3）
 pub const BATCH_SLEEP_MS: u64 = 400;
+/// `FileHash.algo` 里 sha1 的编号
+const HASH_SHA1: u32 = 1;
 /// 环境变量名（唯一通道，§14.1）
 pub const ENV_KEY: &str = "CURSEFORGE_API_KEY";
 /// mod 落盘目录。CF manifest 不含类别信息 ⇒ 一律落这里（§14 的取舍）
@@ -266,6 +269,245 @@ pub fn backoff_ms(retry_after_secs: Option<u64>) -> u64 {
     }
 }
 
+// ── 网络层 ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct ModsResp {
+    data: Vec<CfMod>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CfMod {
+    id: u32,
+    name: String,
+    slug: String,
+    /// `false` ⇒ 作者禁分发；`null`（字段缺失）⇒ **未知**，仍去问 file 接口
+    #[serde(default, rename = "allowModDistribution")]
+    allow_mod_distribution: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileResp {
+    data: CfFile,
+}
+
+#[derive(Debug, Deserialize)]
+struct CfFile {
+    #[serde(rename = "fileName")]
+    file_name: String,
+    #[serde(default, rename = "downloadUrl")]
+    download_url: Option<String>,
+    #[serde(default, rename = "fileLength")]
+    file_length: Option<u64>,
+    #[serde(default)]
+    hashes: Vec<CfHash>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CfHash {
+    algo: u32,
+    value: String,
+}
+
+impl CfFile {
+    fn sha1(&self) -> Option<String> {
+        self.hashes
+            .iter()
+            .find(|h| h.algo == HASH_SHA1)
+            .map(|h| h.value.clone())
+    }
+}
+
+/// 一次 API 调用的结果
+enum ApiOutcome {
+    Ok(serde_json::Value),
+    /// 404：**不是错误**（mod/文件被作者删了），对该条进人工清单
+    NotFound,
+}
+
+fn api_error(what: &str, status: u16, body: &str) -> anyhow::Error {
+    let hint = if status == 403 {
+        " —— key 无效或无权限，检查 CURSEFORGE_API_KEY"
+    } else {
+        ""
+    };
+    let snippet: String = body.chars().take(200).collect();
+    anyhow::anyhow!("CurseForge {what} 返回 {status}{hint}；响应片段: {snippet}")
+}
+
+/// 发一次请求；429/5xx **重试一次**，其余直接报错（§六.25）。
+async fn call(
+    client: &reqwest::Client,
+    what: &str,
+    url: &str,
+    key: &str,
+    body: Option<&serde_json::Value>,
+) -> Result<ApiOutcome> {
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        let mut req = client.get(url);
+        if let Some(b) = body {
+            req = client.post(url).json(b);
+        }
+        let resp = req
+            .header("x-api-key", key)
+            .header("accept", "application/json")
+            .send()
+            .await;
+
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => {
+                // 连接错/超时：重试一次，再失败就报
+                if attempt < 2 {
+                    tokio::time::sleep(std::time::Duration::from_millis(BATCH_SLEEP_MS)).await;
+                    continue;
+                }
+                return Err(anyhow::Error::new(e).context(format!(
+                    "CurseForge {what} 网络失败（已重试 1 次）: {url}"
+                )));
+            }
+        };
+
+        let status = resp.status();
+        if status.is_success() {
+            let v: serde_json::Value = resp
+                .json()
+                .await
+                .with_context(|| format!("CurseForge {what} 返回的不是合法 JSON"))?;
+            return Ok(ApiOutcome::Ok(v));
+        }
+        if status.as_u16() == 404 {
+            return Ok(ApiOutcome::NotFound);
+        }
+
+        let code = status.as_u16();
+        let retry_after = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.trim().parse::<u64>().ok());
+        let text = resp.text().await.unwrap_or_default();
+
+        if retry_decision(code) == RetryAction::Retry && attempt < 2 {
+            let ms = backoff_ms(retry_after);
+            eprintln!("[!] CurseForge {what} 返回 {code}，{ms}ms 后重试一次");
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+            continue;
+        }
+        return Err(api_error(what, code, &text));
+    }
+}
+
+/// 解析全部引用：批量拿 mod 元信息 → 逐条拿直链。
+///
+/// `cache` 是**单次运行内的内存缓存**（§14.5）：同一个 mod 可能出现在多个包里。
+pub async fn resolve_all(
+    client: &reqwest::Client,
+    key: &str,
+    refs: &[CfRef],
+    cache: &mut HashMap<(u32, u32), CfResolved>,
+) -> Result<Vec<CfResolved>> {
+    // ① 批量取 mod 元信息（去重、每批 BATCH_SIZE 个）
+    let mut ids: Vec<u32> = refs.iter().map(|r| r.project_id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+
+    let mut mods: HashMap<u32, CfMod> = HashMap::new();
+    let batches: Vec<&[u32]> = ids.chunks(BATCH_SIZE).collect();
+    for (i, batch) in batches.iter().enumerate() {
+        let body = serde_json::json!({ "modIds": batch, "filterPcOnly": false });
+        let what = format!("POST /v1/mods（批 {}/{}）", i + 1, batches.len());
+        let url = format!("{API_BASE}/v1/mods");
+        match call(client, &what, &url, key, Some(&body)).await? {
+            ApiOutcome::Ok(v) => {
+                let resp: ModsResp = serde_json::from_value(v)
+                    .with_context(|| format!("{what} 的响应结构不认识"))?;
+                for m in resp.data {
+                    mods.insert(m.id, m);
+                }
+            }
+            ApiOutcome::NotFound => bail!("{what} 返回 404 —— 不是预期的响应"),
+        }
+        // 批间限速（免费 key 有配额）
+        if i + 1 < batches.len() {
+            tokio::time::sleep(std::time::Duration::from_millis(BATCH_SLEEP_MS)).await;
+        }
+    }
+
+    // ② 逐条拿文件信息
+    let mut out = Vec::with_capacity(refs.len());
+    for r in refs {
+        let k = (r.project_id, r.file_id);
+        if let Some(hit) = cache.get(&k) {
+            out.push(hit.clone());
+            continue;
+        }
+
+        let meta = mods.get(&r.project_id);
+        let name = meta.map(|m| m.name.clone()).unwrap_or_else(|| format!("projectID {}", r.project_id));
+        let slug = meta.map(|m| m.slug.clone()).unwrap_or_default();
+
+        // 作者明确禁分发 ⇒ **不调 file 接口**（§14.4）
+        if meta.and_then(|m| m.allow_mod_distribution) == Some(false) {
+            let resolved = CfResolved {
+                name,
+                slug,
+                file_name: String::new(),
+                url: None,
+                sha1: None,
+                size: None,
+                project_id: r.project_id,
+                file_id: r.file_id,
+                manual_reason: Some("作者禁止第三方分发".into()),
+            };
+            cache.insert(k, resolved.clone());
+            out.push(resolved);
+            continue;
+        }
+
+        let what = format!("GET /v1/mods/{}/files/{}", r.project_id, r.file_id);
+        let url = format!("{API_BASE}/v1/mods/{}/files/{}", r.project_id, r.file_id);
+        let resolved = match call(client, &what, &url, key, None).await? {
+            ApiOutcome::NotFound => CfResolved {
+                name,
+                slug,
+                file_name: String::new(),
+                url: None,
+                sha1: None,
+                size: None,
+                project_id: r.project_id,
+                file_id: r.file_id,
+                manual_reason: Some("API 查不到该文件（可能已被作者删除）".into()),
+            },
+            ApiOutcome::Ok(v) => {
+                let f: FileResp = serde_json::from_value(v)
+                    .with_context(|| format!("{what} 的响应结构不认识"))?;
+                let f = f.data;
+                let url = f.download_url.clone();
+                CfResolved {
+                    name,
+                    slug,
+                    file_name: f.file_name.clone(),
+                    url: url.clone(),
+                    sha1: f.sha1(),
+                    size: f.file_length,
+                    project_id: r.project_id,
+                    file_id: r.file_id,
+                    manual_reason: url
+                        .is_none()
+                        .then(|| "作者禁止第三方分发（API 未给直链）".to_string()),
+                }
+            }
+        };
+        cache.insert(k, resolved.clone());
+        out.push(resolved);
+    }
+
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,6 +628,38 @@ mod tests {
         assert_eq!(retry_decision(404), RetryAction::GiveUp);
         assert_eq!(retry_decision(400), RetryAction::GiveUp);
         assert_eq!(retry_decision(200), RetryAction::GiveUp);
+    }
+
+    #[test]
+    fn sha1_picked_by_algo_not_position() {
+        // hashes 是数组，sha1 的 algo == 1；顺序不保证，必须按 algo 找
+        let f: CfFile = serde_json::from_str(
+            r#"{"fileName":"a.jar","downloadUrl":"https://cdn/a.jar",
+                "fileLength":10,
+                "hashes":[{"algo":2,"value":"md5xx"},{"algo":1,"value":"sha1xx"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(f.sha1().as_deref(), Some("sha1xx"));
+        assert_eq!(f.file_length, Some(10));
+    }
+
+    #[test]
+    fn sha1_absent_is_none_not_empty() {
+        let f: CfFile =
+            serde_json::from_str(r#"{"fileName":"a.jar","hashes":[{"algo":2,"value":"m"}]}"#)
+                .unwrap();
+        assert_eq!(f.sha1(), None);
+        assert_eq!(f.download_url, None);
+    }
+
+    #[test]
+    fn forbidden_error_hints_at_the_key() {
+        let e = api_error("POST /v1/mods", 403, r#"{"error":"bad key"}"#).to_string();
+        assert!(e.contains("403"), "{e}");
+        assert!(e.contains("CURSEFORGE_API_KEY"), "403 必须指向 key: {e}");
+        // 非 403 不该出现 key 提示，否则会把「服务端抖动」误导成「key 坏了」
+        let e = api_error("POST /v1/mods", 503, "busy").to_string();
+        assert!(!e.contains("CURSEFORGE_API_KEY"), "{e}");
     }
 
     #[test]
