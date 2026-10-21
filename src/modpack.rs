@@ -33,6 +33,7 @@ pub async fn install(
     retries: u32,
     concurrency: usize,
     piece_conns: usize,
+    adaptive: bool,
 ) -> Result<()> {
     println!("[*] 读取 {}", pack.display());
 
@@ -73,10 +74,10 @@ pub async fn install(
     println!("[*] 模组  : {} 个", idx.files.len());
 
     // ① 原版
-    crate::vanilla::install(&mc, root, proxy, retries, concurrency, piece_conns).await?;
+    crate::vanilla::install(&mc, root, proxy, retries, concurrency, piece_conns, adaptive).await?;
 
     // ② Fabric
-    let inst_id = crate::fabric::install(&mc, &loader, root, proxy, retries, concurrency, piece_conns).await?;
+    let inst_id = crate::fabric::install(&mc, &loader, root, proxy, retries, concurrency, piece_conns, adaptive).await?;
 
     // ③ 模组（按 Modrinth 的 path 落到实例目录）
     let inst = root.join("versions").join(&inst_id);
@@ -105,7 +106,7 @@ pub async fn install(
     if skipped > 0 {
         println!("[*] 跳过 client=unsupported 的 {skipped} 个");
     }
-    crate::download::run(&jobs, &inst, proxy, retries, concurrency, piece_conns).await?;
+    crate::download::run(&jobs, &inst, proxy, retries, concurrency, piece_conns, adaptive).await?;
 
     // ④ overrides / client-overrides
     let mut copied = 0usize;

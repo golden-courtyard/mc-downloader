@@ -69,6 +69,7 @@ pub async fn run(
     retries: u32,
     concurrency: usize,
     piece_conns: usize,
+    adaptive: bool,
 ) -> Result<()> {
     let client = client(proxy)?;
 
@@ -81,7 +82,7 @@ pub async fn run(
         let client = client.clone();
         let root = root.to_path_buf();
         let pg = pg.clone();
-        async move { one_with_retry(&client, &job, &root, retries, piece_conns, &pg).await }
+        async move { one_with_retry(&client, &job, &root, retries, piece_conns, adaptive, &pg).await }
     }))
     .buffer_unordered(concurrency.max(1));
 
@@ -117,11 +118,12 @@ async fn one_with_retry(
     root: &Path,
     retries: u32,
     piece_conns: usize,
+    adaptive: bool,
     pg: &Arc<Progress>,
 ) -> Result<(String, bool)> {
     let mut attempt = 0u32;
     loop {
-        match one(client, job, root, retries, piece_conns, pg).await {
+        match one(client, job, root, retries, piece_conns, adaptive, pg).await {
             Ok(v) => return Ok(v),
             Err(e) => {
                 if attempt >= retries {
@@ -141,6 +143,7 @@ async fn one(
     root: &Path,
     retries: u32,
     piece_conns: usize,
+    adaptive: bool,
     pg: &Arc<Progress>,
 ) -> Result<(String, bool)> {
     let dst = root.join(&job.path);
@@ -163,7 +166,7 @@ async fn one(
 
     if let Some(size) = job.size {
         if size >= SPLIT_THRESHOLD {
-            one_split(client, job, &dst, size, retries, piece_conns, pg).await?;
+            one_split(client, job, &dst, size, retries, piece_conns, adaptive, pg).await?;
             return Ok((job.path.clone(), false));
         }
     }
@@ -223,6 +226,7 @@ async fn one_split(
     size: u64,
     retries: u32,
     piece_conns: usize,
+    adaptive: bool,
     pg: &Arc<Progress>,
 ) -> Result<()> {
     let table = PieceTable::new(size);
@@ -271,15 +275,32 @@ async fn one_split(
     sched.close(); // 不会再有新分片
 
     let conns = piece_conns.min(n_pieces).max(1);
+    // 自适应模式：worker 数按上限开，实际并发由 Semaphore 控制
+    let workers = if adaptive {
+        (conns * 2).min(n_pieces).max(1)
+    } else {
+        conns
+    };
+    let sem = if adaptive {
+        Some(Arc::new(tokio::sync::Semaphore::new(conns)))
+    } else {
+        None
+    };
+
     let mut handles = Vec::new();
-    for _ in 0..conns {
+    for _ in 0..workers {
         let s = sched.clone();
         let c = client.clone();
         let t = tmp.clone();
         let pg = pg.clone();
         let pool = pool.clone();
+        let sem = sem.clone();
         handles.push(tokio::spawn(async move {
             while let Some(pj) = s.next().await {
+                let _permit = match &sem {
+                    Some(sm) => sm.acquire().await.ok(),
+                    None => None,
+                };
                 let mut attempt = 0u32;
                 loop {
                     match fetch_piece(&c, &pj, &t, &pg, &pool).await {
@@ -297,8 +318,43 @@ async fn one_split(
             Ok::<_, anyhow::Error>(())
         }));
     }
+    let tuner = match &sem {
+        Some(sm) => {
+            let sm = sm.clone();
+            let pg2 = pg.clone();
+            let ceiling = workers;
+            Some(tokio::spawn(async move {
+                let mut last = pg2.done();
+                let mut last_delta = 0u64;
+                let mut tick = tokio::time::interval(Duration::from_secs(2));
+                tick.tick().await;
+                loop {
+                    tick.tick().await;
+                    let now = pg2.done();
+                    let delta = now.saturating_sub(last);
+                    last = now;
+                    if delta == 0 {
+                        continue;
+                    }
+                    let avail = sm.available_permits();
+                    if delta > last_delta && avail < ceiling {
+                        sm.add_permits(1);
+                    } else if delta < last_delta && avail > 1 {
+                        let take = (avail / 2).max(1);
+                        sm.forget_permits(take);
+                    }
+                    last_delta = delta;
+                }
+            }))
+        }
+        None => None,
+    };
+
     for h in handles {
         h.await??;
+    }
+    if let Some(t) = tuner {
+        t.abort();
     }
 
     // 整文件校验（SHA1 是全文件的，不是分片的）

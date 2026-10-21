@@ -27,6 +27,7 @@ pub async fn install(
     retries: u32,
     concurrency: usize,
     piece_conns: usize,
+    adaptive: bool,
 ) -> Result<String> {
     let client = crate::download::client(proxy)?;
     let url = format!("https://meta.fabricmc.net/v2/versions/loader/{mc}/{loader}/profile/json");
@@ -69,7 +70,7 @@ pub async fn install(
     }
 
     println!("[*] Fabric 库: {} 个", jobs.len());
-    crate::download::run(&jobs, root, proxy, retries, concurrency, piece_conns).await?;
+    crate::download::run(&jobs, root, proxy, retries, concurrency, piece_conns, adaptive).await?;
 
     Ok(prof.id)
 }
