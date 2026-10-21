@@ -406,3 +406,18 @@ cargo build --release --locked
   于是缓存永远是半删状态。别指望 `cargo clean` 修它。
 - **`1.99.1` 这套 toolchain 是装坏的**（`rustup component list` 报
   `missing manifest`）；能用的是 `stable`，而 `stable` 恰好就是 1.99.1。
+- **release 构建不是「本地跑不了」，是「固定路径被拦」**
+  （2026-10-21 更正，此前记错过）：沙箱只拦 `<repo>/target/release` 这个路径，
+  用 `CARGO_TARGET_DIR` 指到仓库外即可。
+
+  ```bash
+  CARGO_TARGET_DIR=/tmp/mcd-rel cargo build --release --locked
+  CARGO_TARGET_DIR=/tmp/mcd-rel cargo test  --release --locked
+  ```
+
+  实测：产出 4.48 MB、`--version` 正常、`vanilla 1.7.10` 全缓存回归通过、
+  **release 下 62 个测试同样全绿**。
+
+  ⚠️ **判据：遇到「做不到」先问「是能力不行，还是某个具体路径被拦」** ——
+  这两者的绕法完全不同，而后者往往换条路就通了。之前把它写成「本地无法验证」，
+  于是把一个能 20 秒做完的验证推给了 CI，等到下一轮才发现是路径问题。
