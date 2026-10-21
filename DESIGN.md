@@ -645,3 +645,90 @@ mc-downloader fetch "https://<bucket>.s3.amazonaws.com/<key>?X-Amz-Signature=...
 - **§12 是"证明现在这套对"**，§13 是"下一步往哪走"。
 - 13.2 的 P1 项做完，都要**回到 net_faults 跑一遍**（14 场景 + AIMD 三臂），
   确认改动没有破坏已有的传输/内核语义。
+
+---
+
+## 十四、CurseForge 整合包支持（2026-10-22 立）
+
+> 起因：`D:/Games/mcmodpak` 里有 6 个真实整合包，**3 个是 CurseForge 格式**（`manifest.json`），
+> 而现有 `kind = "pack"` 只认 Modrinth 的 `modrinth.index.json`。
+> 实测 188 个 mod 里 **169 个可自动下载、19 个禁分发（10.1%）**。
+
+### 14.1 配置：**只有环境变量**，不提供配置文件通道
+
+| 项 | 决定 |
+|---|---|
+| 变量名 | `CURSEFORGE_API_KEY` |
+| 读取 | 缺失时**明确报错**（含获取与设置指引），**不许静默跳过、不许用空串调 API** |
+| 配置文件 | ❌ **不做** |
+
+> **为什么不做配置文件**：env 是唯一"零落盘点"的方案。
+> 多一条配置文件通道 = 多一个必须保证在 `.gitignore` 里的文件 = 多一个泄露面，而收益接近零（`export` 一行就够）。
+>
+> ⚠️ Windows 的坑：`setx` 只改注册表里的用户环境变量，**当前已开的终端读不到**，必须重开。
+> 要当前窗口生效得用 `set CURSEFORGE_API_KEY=...`。
+
+### 14.2 格式识别：**`kind = "pack"` 自动分流**，不新增 kind
+
+现有 `pack` 读 zip 里的 json，改为看**根目录有哪个标记文件**：
+
+| 标记 | 分支 |
+|---|---|
+| `modrinth.index.json` | 现有 Modrinth 路径（不动） |
+| `manifest.json` | **新增 CurseForge 路径** |
+| 都没有 | 报错（列出实际根目录，便于用户判断） |
+
+> **为什么不加 `kind = "curseforge"`**：同一批文件（`.zip`/`.mrpack`）用户不该记哪个是哪个格式。
+> 内部两条路径，对外一个入口。
+
+### 14.3 数据流（三步，全部复用现有下载器）
+
+```
+manifest.json
+   ↓ 解析
+[{projectID, fileID}, ...]                      ① 读清单（纯本地）
+   ↓ POST /v1/mods  （50 个一批，拿 allowModDistribution + name + slug）
+   ↓ GET /v1/mods/{id}/files/{fid}（拿 downloadUrl + fileName + hashes.sha1）
+可分发 → TaskSpec::Generic { url, sha1, file_name }   ② 走现有分片下载
+禁分发 → manual.txt（mod 名 + CurseForge 链接）       ③ 不尝试下载
+```
+
+**关键**：② **完全复用 `download::run`**，不新写下载逻辑。CurseForge 给的 `downloadUrl` 就是普通 HTTPS 直链。
+
+### 14.4 禁分发：**不绕过，生成人工清单**
+
+`allowModDistribution: false` ⇒ API 返回 `downloadUrl: null`。**这是作者的授权选择，不绕过**（绕过违反 ToS）。
+
+`manual.txt` 格式：
+
+```
+以下 5 个 mod 的作者禁止第三方分发，需手动下载：
+  1. Playmate            https://www.curseforge.com/minecraft/mc-mods/<slug>/files/6752633
+  2. Fresh Animations    https://...
+  ...
+放到位后重跑本命令即可（已下载的会跳过）。
+```
+
+### 14.5 缓存：**只在内存，不落盘**
+
+单次运行内用 `HashMap<(u32,u32), CfFileInfo>` 缓存 API 结果（同一 mod 可能出现在多个包）。
+**不写磁盘**——跨运行的重复查询只有 188 次量级，不值得为它引入一个需要管理生命周期的文件。
+
+### 14.6 实测数据（2026-10-22，188 个 mod）
+
+| 包 | mod 数 | 可自动 | 禁分发 | 禁分发率 |
+|---|---|---|---|---|
+| challenge of death | 14 | 9 | 5 | **35.7%** |
+| More FPS [NEOFORGE] | 80 | 77 | 3 | 3.8% |
+| IWS 26.3 Fabric | 94 | 83 | 11 | 11.7% |
+| **合计** | **188** | **169** | **19** | **10.1%** |
+
+⇒ **90% 可自动化**，够用。禁分发率高的包（如 35.7% 那个）手动补几分钟。
+
+### 14.7 明确不做
+
+| 不做 | 归属 |
+|---|---|
+| **Forge / NeoForge 加载器安装** | **另一条线**（要解析 installer 的 `install_profile.json` + 跑 processors），见 §13.2 通用 P1 |
+| CurseForge 官方启动器的"已安装包"探测 | 不做 |
+| 禁分发 mod 的任何绕过手段 | **不做，也不该做** |
