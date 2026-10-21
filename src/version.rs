@@ -83,6 +83,8 @@ pub struct Job {
     pub sha1: Option<String>,
     /// 文件大小（未知时为 None；有值且 > 8MB 才考虑分片）
     pub size: Option<u64>,
+    /// 额外镜像（同内容的其它 URL）；空表示只用 `url`
+    pub mirrors: Vec<String>,
 }
 
 /// 返回解析结果 + 原始 JSON 文本（后者要原样落到 versions/<id>/<id>.json）
@@ -125,6 +127,7 @@ pub async fn collect(client: &reqwest::Client, v: &VersionJson) -> Result<Vec<Jo
         path: format!("versions/{}/{}.jar", v.id, v.id),
         sha1: v.downloads.client.sha1.clone(),
         size: v.downloads.client.size,
+        mirrors: Vec::new(),
     });
 
     // ② 依赖库（按 rules 过滤非 Windows 项）
@@ -142,6 +145,7 @@ pub async fn collect(client: &reqwest::Client, v: &VersionJson) -> Result<Vec<Jo
                     path: format!("libraries/{p}"),
                     sha1: a.sha1.clone(),
                     size: a.size,
+                    mirrors: Vec::new(),
                 });
             }
         }
@@ -156,6 +160,7 @@ pub async fn collect(client: &reqwest::Client, v: &VersionJson) -> Result<Vec<Jo
                             path: format!("libraries/{p}"),
                             sha1: nat.sha1.clone(),
                             size: nat.size,
+                            mirrors: Vec::new(),
                         });
                     }
                 }
@@ -170,6 +175,7 @@ pub async fn collect(client: &reqwest::Client, v: &VersionJson) -> Result<Vec<Jo
             path: format!("assets/indexes/{}.json", ai.id),
             sha1: None,
             size: None,
+            mirrors: Vec::new(),
         });
 
         let idx: AssetIndexJson = client
@@ -190,6 +196,7 @@ pub async fn collect(client: &reqwest::Client, v: &VersionJson) -> Result<Vec<Jo
                 path: format!("assets/objects/{a}/{h}"),
                 sha1: Some(h.clone()),
                 size: obj.size,
+                mirrors: Vec::new(),
             });
         }
     }

@@ -26,7 +26,14 @@ struct PackFile {
 }
 
 /// 装一个 Modrinth 格式整合包（.mrpack / 同样结构的 .zip）
-pub async fn install(pack: &Path, root: &Path, proxy: Option<&str>, retries: u32) -> Result<()> {
+pub async fn install(
+    pack: &Path,
+    root: &Path,
+    proxy: Option<&str>,
+    retries: u32,
+    concurrency: usize,
+    piece_conns: usize,
+) -> Result<()> {
     println!("[*] 读取 {}", pack.display());
 
     let file = std::fs::File::open(pack).with_context(|| "打不开整合包文件")?;
@@ -66,10 +73,10 @@ pub async fn install(pack: &Path, root: &Path, proxy: Option<&str>, retries: u32
     println!("[*] 模组  : {} 个", idx.files.len());
 
     // ① 原版
-    crate::vanilla::install(&mc, root, proxy, retries).await?;
+    crate::vanilla::install(&mc, root, proxy, retries, concurrency, piece_conns).await?;
 
     // ② Fabric
-    let inst_id = crate::fabric::install(&mc, &loader, root, proxy, retries).await?;
+    let inst_id = crate::fabric::install(&mc, &loader, root, proxy, retries, concurrency, piece_conns).await?;
 
     // ③ 模组（按 Modrinth 的 path 落到实例目录）
     let inst = root.join("versions").join(&inst_id);
@@ -92,12 +99,13 @@ pub async fn install(pack: &Path, root: &Path, proxy: Option<&str>, retries: u32
             path: f.path.clone(),
             sha1: f.hashes.get("sha1").cloned(),
                 size: None,
+            mirrors: Vec::new(),
         });
     }
     if skipped > 0 {
         println!("[*] 跳过 client=unsupported 的 {skipped} 个");
     }
-    crate::download::run(&jobs, &inst, proxy, retries).await?;
+    crate::download::run(&jobs, &inst, proxy, retries, concurrency, piece_conns).await?;
 
     // ④ overrides / client-overrides
     let mut copied = 0usize;
