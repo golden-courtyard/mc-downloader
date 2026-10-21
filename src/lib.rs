@@ -4,6 +4,7 @@
 //! 逻辑全部住在这里，**为的是可测**——bin crate 的模块无法写集成测试。
 
 pub mod config;
+pub mod curseforge;
 pub mod download;
 pub mod fabric;
 pub mod manifest;
