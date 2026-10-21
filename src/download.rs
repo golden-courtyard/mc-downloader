@@ -507,8 +507,11 @@ async fn one_split(
                 if delta > last_delta && budget < workers {
                     budget += 1;
                     act = "add";
-                } else if delta < last_delta && budget > 1 && t - last_cut >= 2 {
-                    // 防抖：减半后两个 tick 内不再减，避免抖动下反复砍半把并发饿死在低位
+                } else if delta * 4 < last_delta * 3 && budget > 1 && t - last_cut >= 2 {
+                    // 只有「掉幅 > 25%」才算拥塞信号：`delta*4 < last_delta*3` ⇔ `delta < 0.75×last`。
+                    // 不设阈值时 delta 掉 0.2%（本身就是噪声）就会腰斩并发 —— 批次 5 的 add/cut
+                    // 锯齿（cut=4 / add=22）很可能就是它自己抖出来的。整数乘避免浮点。
+                    // 另外仍保留「减半后两个 tick 内不再减」的防抖：阈值管"单次掉幅"，防抖管"频率"。
                     take = (budget / 2).max(1);
                     budget -= take;
                     last_cut = t;
