@@ -238,6 +238,13 @@ SHA256     本地 c3514bf0…274b == 官方 SHA256SUMS 同值  ✅
 | **多源调度** | *MDTP — An Adaptive Multi-Source Data Transfer Protocol*（2505.09597） | 自适应多源传输，与我们的 `--adaptive` + `mirrors` 同方向。等真的开始测多源时再读 |
 | 评估方法本身 | *Emulation vs Simulation*（2608.02095） | 拥塞控制类评估"性能取决于算法/传输栈/应用行为/测量过程的交互"——提醒我们**测出来的可能是环境不是代码** |
 
+
+#### D. 依赖选型的待评估项
+
+| 项 | 说明 |
+|---|---|
+| **`reqwest` 默认 `native-tls` → 需要 OpenSSL 头文件** | 2026-10-21 在 Kali VM 上撞到：只有运行时 `libssl.so.3`、无 `libssl-dev`，`cargo build` 直接失败（`Could not find directory of OpenSSL installation`）。CI 上能过是因为 ubuntu-latest 自带 `libssl-dev`。<br>**建议评估切 `rustls-tls`**：`default-features = false, features = ["json", "stream", "rustls-tls"]`。<br>收益：去掉 C 依赖 ⇒ 交叉编译到 `x86_64-unknown-linux-musl`（静态单文件）变得可行、任何 Linux 都能直接编译。<br>代价：需确认证书验证行为差异（rustls 更严）与根证书来源（`webpki-roots` vs 系统）。<br>⚠️ 这会改 TLS 栈，属**行为变更**，需要单独一轮 + 审查 |
+
 ---
 
 ## 九、高性能复制器（待评估）

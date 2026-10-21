@@ -203,11 +203,32 @@
 - **纪律**：**不要换成全量 NOPASSWD** —— 该 VM 是桥接校园网，暴露面比 host-only 大，
   只放开测试真正需要的三条
 
-### T2.3 VM 内可编译
+### T2.3 VM 内可编译 —— ✅ **已完成（2026-10-21）**
 
-- **现状**：Rust **未安装**（`cargo not found`）
-- **输出**：优先 VM 内装 rustup（装到 `~/.cargo`，**不需要 sudo**）；失败退本机交叉编译 `x86_64-unknown-linux-musl`
-- **验证**：VM 内 `./mc-downloader --version` → `0.5.0`；且版本 ≥ `rust-version = 1.99`
+- **结果**：`rustc` / `cargo` **1.99.1**；`cargo build --locked --release` 通过
+  （首次 405s 含 207 个 crate 下载，依赖缓存后 **28.34s**）；最小下载 sha1 与常量一致
+- **代码传输**：`tar -czf - src Cargo.toml Cargo.lock … | ssh … 'tar -xzf -'`
+  —— 构造上就排除 `.git/` 与 `target/`，且**字节级传输不经过文本转换**（行尾天然不变）。
+  到 VM 后逐文件核对：18 个文件 CR 字节全 0，`Cargo.lock` 两侧 sha1 相同。
+- ⚠️ **漏掉的一步（D-21）：编译需要 OpenSSL 头文件**
+  `reqwest 0.12` 默认 features → `native-tls` → `openssl-sys`；
+  VM 只有运行时 `libssl.so.3`，**无头文件、无 pkg-config**，而 `apt-get install` 要密码。
+  免 root 解法：
+  ```bash
+  apt-get download libssl-dev            # 走镜像；版本要与已装的 libssl3t64 对齐
+  dpkg-deb -x libssl-dev_*.deb ~/openssl-dev
+  # 私有 prefix：include 指向解出的 140 个头
+  #   ⚠️ 架构特定的 opensslconf.h / configuration.h 在 include/x86_64-linux-gnu/openssl/，不在 include/openssl/
+  #   lib 指向系统 libssl.so.3 / libcrypto.so.3（头只在编译期需要）
+  ```
+  然后固化到 **VM 的** `~/.cargo/config.toml` 的 `[env] OPENSSL_DIR / OPENSSL_NO_VENDOR`，
+  使后续 `cargo build` 无需任何环境变量。
+  **仓库的 `Cargo.lock` 一个字节没动**（两侧 sha1 相同）。
+- ⚠️ **VM 重装后这一步必须重做**（`/etc` 和 `~` 都在 VM 盘上）
+- **验证**：`--version` → `mc-downloader 0.5.0`；最小下载 sha1 = `bd60405be79948989a6c1d6963ee20e6c940b936`
+- ⚠️ **不要用「VM 上 `git status`」做洁净度判据**：tar 传过去时排除了 `.git`，VM 上不是仓库。
+  正确判据是**两侧 `Cargo.lock` 指纹相等 + 本机 `git status` 为空** ——
+  前者证明"传过去的一致"，后者证明"没被改动"，比单看 `git status` 更直接。
 
 ### T2.4 netem / iptables 能力探测 —— ✅ **已完成，结论推翻了一处设计**
 
