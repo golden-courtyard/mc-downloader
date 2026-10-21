@@ -27,4 +27,9 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 lto = "thin"
 codegen-units = 1
 strip = true
-panic = "abort"
+# 刻意**不设** panic = "abort"：
+#   · 它会改变失败语义 —— 分片 worker 一 panic 整个进程就死，而 download.rs 里
+#     专门有一条 `Err(JoinError) => ...` 分支来接住 worker 崩溃、先 abort 掉
+#     flusher 再返回错误；abort 模式下那条分支永远走不到，续传状态也来不及落盘。
+#   · 本机沙箱拦 target/release 的写入，release 构建无法在本地验证（只有 CI 能跑），
+#     不加无法验证的运行时语义改动。
