@@ -231,8 +231,14 @@ check_aimd() {
     #   ⇒ 改成测**守卫本身是否按设计生效**。
     #
     # ⚠ 本场景**没有 sha 断言**：三臂都在 78s 被 timeout 收工，1GB 素材下不完 ⇒
-    #    产物从未 rename 成 t.bin，只有预分配的 .part（`.part.state` 40B）。
+    #    产物从未 rename 成 t.bin，只有 .part（`.part.state` 40B）。
     #    对未完成文件算 sha 无意义 —— 硬加会得到假 FAIL。
+    #    ⭐ 更硬的理由（堵住"那算 .part 的 sha 不就行了"）：`.part` 是**稀疏预分配**的
+    #       （download.rs:325 `f.set_len(size)`），未写区域是空洞、**读出来全是 0**：
+    #       实测 逻辑 1GB / 实占 416MB（臂A）· 尾 1MiB 非零字节 **0/1048576**。
+    #       ⇒ 对 .part 算 sha 只反映"下了多少"，与内容正确性无关。
+    #       且 rename 只在全部 worker 正常收工时执行（download.rs:590），
+    #       被 timeout 杀掉时进程直接终止，rename 不可能发生 ⇒ **不是"不方便"，是"没有对象"**。
     #    内容正确性由批次 3/4 的 assert_sha 覆盖；本档只判「段趋势 + tuner/守卫动作」。
     #    （若将来要在这一档验内容，需加一条小素材的完成腿，例如 8MB / 约 8s。）
     #
