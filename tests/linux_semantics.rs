@@ -89,32 +89,48 @@ fn assert_no_fd_exhaustion(what: &str, out: &Output) {
 
 // ─────────────────────── 本地假源（判据 5 用） ───────────────────────
 
-/// `python3 -m http.server` 起的本地源。
+/// stdlib `http.server` 起的本地源（见下方 [`SERVER_SNIPPET`]）。
 ///
 /// **只用标准库，不依赖仓里其它脚本**（`scripts/net_faults/fakeorigin.py` 是另一批
 /// 任务的产物，测试不该被它的存在与否绑架）。代价是 `http.server` **不支持 Range**，
 /// 所以判据 5 的载荷刻意小于 8 MB 分片阈值，让它走单流下载路径。
+///
+/// **一处必须自己动手改的地方**：不用 `-m http.server` 的 CLI，而是 `-c` 内联起来，
+/// 只为把 listen backlog 调大。`socketserver.TCPServer.request_queue_size` 的 stdlib
+/// 默认值是 **5**，64 条连接同时到达时 accept 队列会溢出、内核丢 SYN、客户端按 RTO
+/// 退避 —— 团队实测耗时差 **7–8 倍**（`d6dffbe`，同一处问题在假源里已修）。
+/// 判据 5 要压的正是「64 条同时在飞」，源头被排队截断就等于没测。
 struct HttpServer {
     child: Child,
 }
+
+/// 内联静态源：**唯一非默认设置是 backlog**，其余与 `-m http.server` 等价。
+const SERVER_SNIPPET: &str = r#"
+import functools, http.server, socketserver, sys
+port, directory = int(sys.argv[1]), sys.argv[2]
+socketserver.TCPServer.request_queue_size = 128
+http.server.ThreadingHTTPServer.request_queue_size = 128
+http.server.test(
+    HandlerClass=functools.partial(http.server.SimpleHTTPRequestHandler, directory=directory),
+    ServerClass=http.server.ThreadingHTTPServer,
+    port=port, bind="127.0.0.1",
+)
+"#;
 
 impl HttpServer {
     fn start(root: &Path, port: u16, log: &Path) -> Self {
         let out = File::create(log).expect("创建假源日志文件失败");
         let err = out.try_clone().expect("复制假源日志句柄失败");
         let child = Command::new("python3")
-            .args(["-m", "http.server"])
+            .arg("-c")
+            .arg(SERVER_SNIPPET)
             .arg(port.to_string())
-            .args(["--bind", "127.0.0.1"])
-            .arg("--directory")
             .arg(root)
             .stdin(Stdio::null())
             .stdout(Stdio::from(out))
             .stderr(Stdio::from(err))
             .spawn()
-            .unwrap_or_else(|e| {
-                panic!("起 `python3 -m http.server` 失败（Linux CI 必须有 python3）: {e}")
-            });
+            .unwrap_or_else(|e| panic!("起本地假源失败（Linux CI 必须有 python3）: {e}"));
         Self { child }
     }
 
@@ -321,7 +337,7 @@ fn unlink_open_file() {
 /// 判据 5：`--concurrency 64` 下**真实下载**不因 `EMFILE` 失败。
 ///
 /// 为什么只在 Linux 上测：`EMFILE` / `ulimit` 这套是 POSIX 的 fd 预算模型；
-/// 而且假源用的是 `python3 -m http.server`，Windows 上跑测试还得额外依赖解释器。
+/// 而且假源用的是 stdlib `http.server`，Windows 上跑测试还得额外依赖 python3。
 ///
 /// ## 路线选择（为什么不照抄 spec 里那一行 `fetch` 命令，也不走 `ulimit` 路线）
 ///
