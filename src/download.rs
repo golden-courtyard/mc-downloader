@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};
 use sha1::{Digest, Sha1};
 use std::path::Path;
+use tokio::io::AsyncWriteExt;
 
 use crate::version::Job;
 
@@ -13,7 +14,7 @@ const CONCURRENCY: usize = 16;
 /// （实测 26.3、1.7.10、Fabric profile、48 个模组都未走代理）。
 /// 只有显式传 `--proxy` 时才走代理 —— 与「代理按域名判，不是一律加」一致。
 pub fn client(proxy: Option<&str>) -> Result<reqwest::Client> {
-    let mut b = reqwest::Client::builder().user_agent("mc-downloader/0.2");
+    let mut b = reqwest::Client::builder().user_agent("mc-downloader/0.3");
     b = match proxy {
         Some(p) => b.proxy(
             reqwest::Proxy::all(p).with_context(|| format!("代理地址无效: {p}"))?,
@@ -41,11 +42,6 @@ async fn sha1_file(path: &Path) -> Result<String> {
         Ok(hex::encode(h.finalize()))
     })
     .await?
-}
-
-/// 在 blocking 线程池里算内存块 SHA1
-async fn sha1_bytes(data: Vec<u8>) -> Result<String> {
-    Ok(tokio::task::spawn_blocking(move || hex::encode(Sha1::digest(&data))).await?)
 }
 
 pub async fn run(jobs: &[Job], root: &Path, proxy: Option<&str>, retries: u32) -> Result<()> {
@@ -109,6 +105,10 @@ async fn one_with_retry(
     }
 }
 
+/// 单文件：**流式写盘 + 边写边算 SHA1**，不再把整个文件读进内存。
+///
+/// 先写 `<file>.part`，校验通过再 rename —— 中断时不会留下一个
+/// 看起来"完整"但实际是半截的文件。
 async fn one(client: &reqwest::Client, job: &Job, root: &Path) -> Result<(String, bool)> {
     let dst = root.join(&job.path);
 
@@ -124,25 +124,50 @@ async fn one(client: &reqwest::Client, job: &Job, root: &Path) -> Result<(String
         }
     }
 
-    let bytes = client
+    let resp = client
         .get(&job.url)
         .send()
         .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-
-    if let Some(expect) = &job.sha1 {
-        let got = sha1_bytes(bytes.to_vec()).await?;
-        if got != *expect {
-            anyhow::bail!("sha1 不匹配 {}: got {} expect {}", job.path, got, expect);
-        }
-    }
+        .error_for_status()?;
 
     if let Some(parent) = dst.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
-    tokio::fs::write(&dst, &bytes).await?;
+
+    let tmp = dst.with_extension(format!(
+        "{}part",
+        dst.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!("{e}."))
+            .unwrap_or_default()
+    ));
+
+    let mut file = tokio::fs::File::create(&tmp)
+        .await
+        .with_context(|| format!("创建临时文件失败: {}", tmp.display()))?;
+
+    let mut hasher = Sha1::new();
+    let mut stream = resp.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.with_context(|| format!("读取响应流失败: {}", job.url))?;
+        hasher.update(&chunk);
+        file.write_all(&chunk).await?;
+    }
+    file.flush().await?;
+    drop(file);
+
+    if let Some(expect) = &job.sha1 {
+        let got = hex::encode(hasher.finalize());
+        if got != *expect {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            anyhow::bail!("sha1 不匹配 {}: got {} expect {}", job.path, got, expect);
+        }
+    }
+
+    tokio::fs::rename(&tmp, &dst)
+        .await
+        .with_context(|| format!("落盘失败: {}", dst.display()))?;
 
     Ok((job.path.clone(), false))
 }
