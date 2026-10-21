@@ -19,6 +19,13 @@
 #   ⚠ **A 臂的 `cut ≥ 1` 依赖流量抖动**：`cut` 的条件是 `delta < last_delta`。
 #      恒定速率源（delta 每 tick 精确相等）会一直走 `hold` ⇒ **cut = 0**。
 #
+#   📌 **A 臂 `cut` 期望：1–2（本判据只断言 ≥1）**
+#      加 25% 阈值（`delta*4 < last_delta*3`，27e7d0e）后，80→8mbit 的跳变只在跳变那一
+#      tick 触发一次；8mbit 段内 delta 只抖 ±5%，够不到 25%，不再反复减半
+#      ⇒ 计数从加阈值前的 **8** 降到 **1–2**（实测 1，add=2，hold=34）。
+#      **这是设计意图，不是退化边缘。** 若看到 0，先查 hold 次数（见 B 块说明）：
+#      有 hold ⇒ tuner 在跑、只是没捕捉到跳变；无 hold ⇒ 守卫把它吃了，去查 piece_secs。
+#
 #   ⚠ **守卫是「一次性判定，只看起步速率」**（39765be 起）：
 #       `piece_secs = piece_size × conns ÷ 总吞吐`，> 3 个 2s tick（6s）就
 #       `act=disabled reason=coarse_grain` 并退回固定并发，此后不再 add/cut。
