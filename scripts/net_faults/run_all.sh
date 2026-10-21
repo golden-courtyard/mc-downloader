@@ -137,6 +137,14 @@ for f in "${SELECTED[@]}"; do
         elapseds+=("$el")
         stamps+=("${st_hms}→$(now_hms)")
 
+        # 持久化本轮快照：$OUT 默认 /tmp/net_faults，**重启会清空**（2026-10-22 已丢过一次）。
+        # 只在场景产生了 snap-* 时搬（目前仅多轮场景如 aimd_step 会生成）。
+        for d in "${OUT:-/tmp/net_faults}"/logs/snap-*; do
+            [[ -d "$d" ]] || continue
+            mkdir -p "$HOME/net_faults/artifacts" 2>/dev/null || true
+            cp -r "$d" "$HOME/net_faults/artifacts/" 2>/dev/null || true
+        done
+
         v="$(grep -E '^(PASS|FAIL) ' "$log" | tail -1)"
         if [[ -z "$v" ]]; then
             verdicts+=("FAIL")

@@ -380,9 +380,14 @@ check_aimd() {
         ok=1; detail+="B:add=$b_add,cut=$b_cut(expect 0/0：已退回固定并发) "
     else detail+="B:add=0 B:cut=0 "; fi
     detail+="B:seg2=$b_seg2 B:zero2=$b_zero2/$b_n2 "
+    # ⚠️ B 臂「整段无数据」= 环境停摆，不是产品信号（2026-10-22 定）：
+    #    C 是**无 tuner 的对照臂**，实测它也会整段零吞吐（5 轮里 2 轮如此）。
+    #    把它记成 FAIL 就是把"环境"记到"产品"账上，且 flake 率 40%（2/5）
+    #    ⇒ repeat 3 有 1-0.6³ = 78% 概率至少红一次，设施不可信。
+    #    ⇒ 记 stalled 作诊断、**不进 PASS/FAIL**；且跳过 seg3 比率（b_seg2=0 时该比率无意义）。
     if (( b_seg2 <= 0 )); then
-        ok=1; detail+="B:seg2=0(无数据) "; fi
-    if (( b_seg3 <= b_seg2 * 2 )); then
+        detail+="B:seg2=0(stalled) B:seg3=$b_seg3 "
+    elif (( b_seg3 <= b_seg2 * 2 )); then
         ok=1; detail+="B:seg3=${b_seg3}(expect>2x seg2) "
     else detail+="B:seg3=$b_seg3 "; fi
 
@@ -395,8 +400,10 @@ check_aimd() {
         ok=1; detail+="C:tune=${c_tune}(expect 0) "
     else detail+="C:tune=0 "; fi
     detail+="C:seg2=$c_seg2 C:max=$c_max(诊断) "
+    # ⚠️ 同上：C 臂整段无数据 = 环境停摆。它本来就是"无 tuner"的对照臂，
+    #    停摆恰恰证明"这与 tuner 无关"⇒ 不进 PASS/FAIL，只记 stalled。
     if (( c_seg2 <= 0 )); then
-        ok=1; detail+="C:seg2=0(8mbit 段无数据) "; fi
+        detail+="C:seg2=0(stalled) "; fi
 
     ASSERT_DETAIL="$detail"
     return $ok
