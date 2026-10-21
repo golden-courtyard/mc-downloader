@@ -429,18 +429,18 @@ async fn one_split(
                     continue;
                 }
                 let avail = sm.available_permits();
+                let mut act: &str = "hold";
                 if delta > last_delta && avail < workers {
                     sm.add_permits(1);
+                    act = "add";
                 } else if delta < last_delta && avail > 1 {
                     let take = (avail / 2).max(1);
                     sm.forget_permits(take);
+                    act = "cut";
                 }
                 // 诊断输出（design §1.3 D6）：只读，不参与任何判断，无环境变量时零行为差异
                 if std::env::var_os("MC_TUNE_LOG").is_some() {
-                    eprintln!(
-                        "[tune] avail={avail} delta={delta} last={last_delta} after={}",
-                        sm.available_permits()
-                    );
+                    eprintln!("[tune] act={act} avail={avail} delta={delta} last={last_delta}");
                 }
                 last_delta = delta;
             }
