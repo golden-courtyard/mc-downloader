@@ -42,6 +42,20 @@ enum Cmd {
         #[arg(short, long, default_value = ".")]
         dir: PathBuf,
     },
+    /// 下载单个 URL（验证分片用；不给 size 时先 HEAD 探测）
+    Fetch {
+        /// 完整 URL
+        url: String,
+        /// 目标目录
+        #[arg(short, long, default_value = ".")]
+        dir: PathBuf,
+        /// 已知大小（可选）
+        #[arg(short, long)]
+        size: Option<u64>,
+        /// 落地文件名
+        #[arg(short, long, default_value = "out.bin")]
+        name: String,
+    },
     /// 安装整合包（.mrpack，或结构相同的 .zip）
     Pack {
         /// 整合包文件路径
@@ -65,6 +79,29 @@ async fn main() -> Result<()> {
             println!("[*] 网络     : {}", proxy.unwrap_or("直连"));
             vanilla::install(&version, &dir, proxy, retries).await?;
             println!("[+] 完成。用 PCL「添加游戏目录」指向该目录即可。");
+        }
+        Cmd::Fetch { url, dir, size, name } => {
+            let client = download::client(proxy)?;
+            let size = match size {
+                Some(s) => s,
+                None => client
+                    .head(&url)
+                    .send()
+                    .await?
+                    .content_length()
+                    .ok_or_else(|| anyhow::anyhow!("服务器未返回 Content-Length，请用 --size 指定"))?,
+            };
+            println!("[*] URL  : {url}");
+            println!("[*] 大小 : {size} bytes ({:.1} MB)", size as f64 / 1048576.0);
+            println!("[*] 网络 : {}", proxy.unwrap_or("直连"));
+            let job = version::Job {
+                url,
+                path: name,
+                sha1: None,
+                size: Some(size),
+            };
+            download::run(&[job], &dir, proxy, retries).await?;
+            println!("[+] 完成 -> {}", dir.display());
         }
         Cmd::Pack { file, dir } => {
             println!("[*] 输出目录 : {}", dir.display());
