@@ -342,29 +342,67 @@ PASS l2_rst_mid rc=0 recovered=yes rst_at=1707ms rst_kb=8192 elapsed=18757ms sha
 > ⚠️ **期望并发按实测推，别按名义 32 反推**：修 backlog 后 128MB 档实测峰值 **28–32**；
 > 修之前只有 11–15。详见「场景编写须知」里的实测表。
 
-### T4.1 `loss` 三档
+### T4.1 `loss` 三档 —— ✅ **已完成**
 
-- **输入**：`lib.sh` + `fakeorigin.py`（`SIZE_MB=128`）+ `expected_sha1.txt` 的 128MB 行
-- **参数**：显式 `--piece-conns 32`（否则只有 4 条连接）
-- **输出**：`scenarios/l2p_loss_1.sh` · `l2p_loss_5.sh` · `l2p_loss_20.sh`
-- **判据**：1%/5% 下 sha1 一致；20% 下若超时，**`.part.state` 不得留下"可续传"的假象**
-- **验证**：`bash scenarios/l2p_loss_5.sh`
+```
+PASS l2p_loss_1  rc=0   sha=ok                                                      1156ms
+PASS l2p_loss_5  rc=0   sha=ok                                                      3870ms
+PASS l2p_loss_20 rc=124 outcome=timeout_killed part_state_done=2 resumed=resume sha=ok  91201ms
+```
 
-### T4.2 `reorder` 两档
+- **`loss_20` 走的是「超时被杀」**（rc=124，90s 内没有一片 4MB 下完）。
+  单独探过：**200s 内一片都没完成**（`.part` 分配 0MB、state done=0）
+  ⇒ 20% 丢包下 32 条 TCP 会拥塞崩溃，"完成"这条路在本档基本不存在。
+- ✅ **三态区分**（这是本条的核心判据）：
 
-- **输入**：同 T4.1
-- **参数**：显式 `--piece-conns 32`
-- **输出**：`scenarios/l2p_reorder_10.sh` · `l2p_reorder_25.sh`
-- **判据**：sha1 一致。**不一致就说明我们的偏移算法在并发写时错了**
-- **验证**：`bash scenarios/l2p_reorder_25.sh`
+  | 态 | 特征 | 判定表达 |
+  |---|---|---|
+  | 完成 | rc=0 | `outcome=completed` + sha |
+  | **装置杀掉** | `timeout 90` 返回 **124** | `outcome=timeout_killed` |
+  | 程序自己放弃 | 非 0 且非 124（两层重试耗尽，28–40s）| `outcome=errored` |
 
-### T4.3 `duplicate`
+- ⭐ **"不得留假象"是用「真的续一次」验的，不是看文件在不在**：
+  撤 netem、保假源活着、同目录再跑 —— 续得上且 sha1 正确 ⇒ state 诚实；否则判 `sha=假象(...)`。
+  两种进度都实测过：`done=2` → `resumed=resume`（真接着下）；`done=0` → `restarted`（0 进度不冒充进度）。
 
-- **输入**：同 T4.1
-- **参数**：显式 `--piece-conns 32`
-- **输出**：`scenarios/l2p_dup_10.sh`
-- **判据**：sha1 一致（TCP 应去重；不一致说明我们自己的 `expect` 长度校验有问题）
-- **验证**：`bash scenarios/l2p_dup_10.sh`
+- ⚠️ **框架与契约冲突（待 lib.sh 解冻时修）**：
+  `run_case` 的硬规则是「只要 `CASE_TIMEOUT==1` 就判 FAIL，与断言结果无关」，
+  而本档的契约**允许超时** ⇒ 判定行写 `sha=ok` 最终仍是 FAIL。
+  当前变通：`BIN="timeout"`，把装置超时下移成普通非零退出 `rc=124`，`CASE_TIMEOUT` 保持 0。
+  副作用：`CASE_PID` 变成 `timeout` 的 pid，**本档不能用 `assert_local_only`**（本档不需要）。
+  ⇒ 建议加 `CASE_TIMEOUT_OK=1`，让"超时属于可接受结果"的场景不必用外层 wrapper。
+
+### T4.2 `reorder` 两档 —— ✅ **已完成，但判据偏弱**
+
+```
+PASS l2p_reorder_10 rc=0 sha=ok   3241ms
+PASS l2p_reorder_25 rc=0 sha=ok   4746ms
+```
+
+⚠️ **现有判据（只查 sha1）指向偏了**：
+`reorder` 只是让**段**乱序，TCP 会在内核里重排，**正常情况下本就不该影响 sha1**。
+它真正要暴露的是「我们并发写同一偏移」的竞态，而这个竞态在 10%/25% 下都稳定通过。
+
+⇒ **结果：它和 `l2p_loss_1` 的判据没有区别 —— 看起来覆盖了两件事，实际只覆盖一件。**
+⇒ **建议**（下一轮改）：判据补一条「确有乱序/重传的实际证据」，例如 `ss -ti` 的 `retrans` 增量或设备侧计数。
+
+### T4.3 `duplicate` —— ✅ **已完成**
+
+```
+PASS l2p_dup_10 rc=0 sha=ok   1048ms
+```
+
+判据 sha1 一致（TCP 应去重；不一致说明我们自己的 `expect` 长度校验有问题）。
+
+### 批次 4 的 `TIMEOUT_S` 实测
+
+| 场景 | 实测 | 设定 | 余量 |
+|---|---|---|---|
+| 除 `loss_20` 外五个 | 1.0–4.7s | 60 | 很宽 |
+| **`loss_20`** | **91s** | 120（内层 90）| 只剩 1/4 |
+
+⚠️ `loss_20` 的 91s 已吃掉 spec「单场景 ≤120s」的 **3/4**。
+⇒ 若以后把丢包提到 30%，必须换更小的文件，否则**必然超限**。
 
 ---
 
