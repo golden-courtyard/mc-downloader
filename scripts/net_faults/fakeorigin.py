@@ -159,6 +159,16 @@ class Handler(BaseHTTPRequestHandler):
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
+
+    # ⭐ listen backlog：stdlib 默认只有 5（socketserver.TCPServer.request_queue_size）。
+    #    >5 条连接同时到达时 accept 队列溢出 → 内核**丢弃 SYN** → 客户端按 RTO 退避重传
+    #    （1s、2s）→ 128MB/32 连的传输从 0.16s 被拖到 2.1s（实测 7-8 倍），
+    #    吞吐/耗时/AIMD 阶跃窗口全被污染，而且会把「源端排队」伪装成「客户端慢」。
+    #    取 128：场景最大并发是 --piece-conns 64 / --parallel 64，留一倍余量；
+    #    内核上限 net.core.somaxconn=4096，不会被截断。
+    #    （D-9：一行对照实验 queue=5 vs 128 → ListenOverflows +42/+35/+29 vs 0）
+    request_queue_size = 128
+
     # ⭐ TIME_WAIT 之后必须还能 bind（14 场景连跑 + --repeat 3 的命门）
     allow_reuse_address = True
 
