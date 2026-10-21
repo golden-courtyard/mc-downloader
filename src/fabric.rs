@@ -25,6 +25,8 @@ pub async fn install(
     root: &Path,
     proxy: Option<&str>,
     retries: u32,
+    concurrency: usize,
+    piece_conns: usize,
 ) -> Result<String> {
     let client = crate::download::client(proxy)?;
     let url = format!("https://<你的源>/v2/versions/loader/{mc}/{loader}/profile/json");
@@ -62,11 +64,12 @@ pub async fn install(
             path: format!("libraries/{rel}"),
             sha1: None,
             size: None,
+            mirrors: Vec::new(),
         });
     }
 
     println!("[*] Fabric 库: {} 个", jobs.len());
-    crate::download::run(&jobs, root, proxy, retries).await?;
+    crate::download::run(&jobs, root, proxy, retries, concurrency, piece_conns).await?;
 
     Ok(prof.id)
 }

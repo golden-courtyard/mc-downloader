@@ -5,6 +5,7 @@ mod modpack;
 mod piece;
 mod progress;
 mod scheduler;
+mod source;
 mod vanilla;
 mod version;
 
@@ -28,6 +29,14 @@ struct Args {
     /// 单个文件失败后的重试次数（指数退避 1s/2s/4s…）
     #[arg(long, global = true, default_value_t = 3)]
     retry: u32,
+
+    /// 同时下载的文件数（默认 16）
+    #[arg(long, global = true, default_value_t = download::DEFAULT_CONCURRENCY)]
+    concurrency: usize,
+
+    /// 单文件分片时的并发连接数（默认 4）
+    #[arg(long, global = true, default_value_t = download::DEFAULT_PIECE_CONNS)]
+    piece_conns: usize,
 
     #[command(subcommand)]
     cmd: Cmd,
@@ -56,6 +65,9 @@ enum Cmd {
         /// 落地文件名
         #[arg(short, long, default_value = "out.bin")]
         name: String,
+        /// 额外镜像 URL（可重复，内容须与 url 相同）
+        #[arg(long = "mirror")]
+        mirrors: Vec<String>,
     },
     /// 安装整合包（.mrpack，或结构相同的 .zip）
     Pack {
@@ -72,16 +84,18 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let proxy = args.proxy.as_deref();
     let retries = args.retry;
+    let concurrency = args.concurrency;
+    let piece_conns = args.piece_conns;
 
     match args.cmd {
         Cmd::Vanilla { version, dir } => {
             println!("[*] 目标版本 : {version}");
             println!("[*] 输出目录 : {}", dir.display());
             println!("[*] 网络     : {}", proxy.unwrap_or("直连"));
-            vanilla::install(&version, &dir, proxy, retries).await?;
+            vanilla::install(&version, &dir, proxy, retries, concurrency, piece_conns).await?;
             println!("[+] 完成。用 PCL「添加游戏目录」指向该目录即可。");
         }
-        Cmd::Fetch { url, dir, size, name } => {
+        Cmd::Fetch { url, dir, size, name, mirrors } => {
             let client = download::client(proxy)?;
             let size = match size {
                 Some(s) => s,
@@ -100,14 +114,15 @@ async fn main() -> Result<()> {
                 path: name,
                 sha1: None,
                 size: Some(size),
+                mirrors: mirrors.clone(),
             };
-            download::run(&[job], &dir, proxy, retries).await?;
+            download::run(&[job], &dir, proxy, retries, concurrency, piece_conns).await?;
             println!("[+] 完成 -> {}", dir.display());
         }
         Cmd::Pack { file, dir } => {
             println!("[*] 输出目录 : {}", dir.display());
             println!("[*] 网络     : {}", proxy.unwrap_or("直连"));
-            modpack::install(&file, &dir, proxy, retries).await?;
+            modpack::install(&file, &dir, proxy, retries, concurrency, piece_conns).await?;
         }
     }
     Ok(())

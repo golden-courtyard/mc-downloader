@@ -9,12 +9,14 @@ use tokio::io::AsyncWriteExt;
 
 use crate::piece::PieceTable;
 use crate::progress::Progress;
+use crate::source::SourcePool;
 use crate::scheduler::{PieceJob, PieceScheduler};
 use crate::version::Job;
 
-const CONCURRENCY: usize = 16;
-/// 单文件分片时的并发连接数
-const PIECE_CONNS: usize = 4;
+/// 默认：同时下载的文件数
+pub const DEFAULT_CONCURRENCY: usize = 16;
+/// 默认：单文件分片时的并发连接数
+pub const DEFAULT_PIECE_CONNS: usize = 4;
 /// 低于此大小不分片
 const SPLIT_THRESHOLD: u64 = 8 * 1024 * 1024;
 
@@ -60,7 +62,14 @@ fn part_path(dst: &Path) -> PathBuf {
     dst.with_extension(format!("{ext}part"))
 }
 
-pub async fn run(jobs: &[Job], root: &Path, proxy: Option<&str>, retries: u32) -> Result<()> {
+pub async fn run(
+    jobs: &[Job],
+    root: &Path,
+    proxy: Option<&str>,
+    retries: u32,
+    concurrency: usize,
+    piece_conns: usize,
+) -> Result<()> {
     let client = client(proxy)?;
 
     let total_bytes: u64 = jobs.iter().filter_map(|j| j.size).sum();
@@ -72,9 +81,9 @@ pub async fn run(jobs: &[Job], root: &Path, proxy: Option<&str>, retries: u32) -
         let client = client.clone();
         let root = root.to_path_buf();
         let pg = pg.clone();
-        async move { one_with_retry(&client, &job, &root, retries, &pg).await }
+        async move { one_with_retry(&client, &job, &root, retries, piece_conns, &pg).await }
     }))
-    .buffer_unordered(CONCURRENCY);
+    .buffer_unordered(concurrency.max(1));
 
     futures::pin_mut!(stream);
 
@@ -107,11 +116,12 @@ async fn one_with_retry(
     job: &Job,
     root: &Path,
     retries: u32,
+    piece_conns: usize,
     pg: &Arc<Progress>,
 ) -> Result<(String, bool)> {
     let mut attempt = 0u32;
     loop {
-        match one(client, job, root, retries, pg).await {
+        match one(client, job, root, retries, piece_conns, pg).await {
             Ok(v) => return Ok(v),
             Err(e) => {
                 if attempt >= retries {
@@ -130,6 +140,7 @@ async fn one(
     job: &Job,
     root: &Path,
     retries: u32,
+    piece_conns: usize,
     pg: &Arc<Progress>,
 ) -> Result<(String, bool)> {
     let dst = root.join(&job.path);
@@ -152,7 +163,7 @@ async fn one(
 
     if let Some(size) = job.size {
         if size >= SPLIT_THRESHOLD {
-            one_split(client, job, &dst, size, retries, pg).await?;
+            one_split(client, job, &dst, size, retries, piece_conns, pg).await?;
             return Ok((job.path.clone(), false));
         }
     }
@@ -211,6 +222,7 @@ async fn one_split(
     dst: &Path,
     size: u64,
     retries: u32,
+    piece_conns: usize,
     pg: &Arc<Progress>,
 ) -> Result<()> {
     let table = PieceTable::new(size);
@@ -226,6 +238,21 @@ async fn one_split(
         f.set_len(size)?;
     }
 
+    // 多源：job.mirrors 非空时用它，否则只用 job.url
+    let mirrors: Vec<String> = if job.mirrors.is_empty() {
+        vec![job.url.clone()]
+    } else {
+        let mut m = job.mirrors.clone();
+        if !m.contains(&job.url) {
+            m.insert(0, job.url.clone());
+        }
+        m
+    };
+    let pool = Arc::new(SourcePool::new(&mirrors));
+    if mirrors.len() > 1 {
+        println!("[*] 多源: {} 个", mirrors.len());
+    }
+
     let sched = Arc::new(PieceScheduler::new());
     let jobs: Vec<PieceJob> = (0..table.total())
         .filter_map(|i| {
@@ -235,7 +262,7 @@ async fn one_split(
                 piece_idx: i,
                 start: s,
                 end: e,
-                url: job.url.clone(),
+                source_idx: pool.pick(),
             })
         })
         .collect();
@@ -243,18 +270,19 @@ async fn one_split(
     sched.push_many(jobs).await;
     sched.close(); // 不会再有新分片
 
-    let conns = PIECE_CONNS.min(n_pieces).max(1);
+    let conns = piece_conns.min(n_pieces).max(1);
     let mut handles = Vec::new();
     for _ in 0..conns {
         let s = sched.clone();
         let c = client.clone();
         let t = tmp.clone();
         let pg = pg.clone();
+        let pool = pool.clone();
         handles.push(tokio::spawn(async move {
             while let Some(pj) = s.next().await {
                 let mut attempt = 0u32;
                 loop {
-                    match fetch_piece(&c, &pj, &t, &pg).await {
+                    match fetch_piece(&c, &pj, &t, &pg, &pool).await {
                         Ok(()) => break,
                         Err(e) => {
                             if attempt >= retries {
@@ -294,9 +322,15 @@ async fn fetch_piece(
     pj: &PieceJob,
     path: &Path,
     pg: &Arc<Progress>,
+    pool: &Arc<SourcePool>,
 ) -> Result<()> {
+    let url = pool
+        .url_of(pj.source_idx)
+        .ok_or_else(|| anyhow::anyhow!("源 {} 不存在", pj.source_idx))?;
+    let t0 = std::time::Instant::now();
+
     let resp = client
-        .get(&pj.url)
+        .get(&url)
         .header(
             reqwest::header::RANGE,
             format!("bytes={}-{}", pj.start, pj.end - 1),
@@ -305,10 +339,11 @@ async fn fetch_piece(
         .await?;
 
     if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        pool.record_failure(pj.source_idx);
         anyhow::bail!(
             "服务器不支持 Range（HTTP {}），无法分片: {}",
             resp.status(),
-            pj.url
+            url
         );
     }
 
@@ -339,5 +374,6 @@ async fn fetch_piece(
     })
     .await??;
 
+    pool.record_success(pj.source_idx, expect as u64, t0.elapsed().as_secs_f64());
     Ok(())
 }

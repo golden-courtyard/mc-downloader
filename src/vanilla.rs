@@ -2,7 +2,14 @@ use anyhow::Result;
 use std::path::Path;
 
 /// 下载原版：版本 JSON + client jar + libraries（含 native）+ assets
-pub async fn install(mc: &str, root: &Path, proxy: Option<&str>, retries: u32) -> Result<()> {
+pub async fn install(
+    mc: &str,
+    root: &Path,
+    proxy: Option<&str>,
+    retries: u32,
+    concurrency: usize,
+    piece_conns: usize,
+) -> Result<()> {
     let client = crate::download::client(proxy)?;
 
     let mf = crate::manifest::fetch(&client).await?;
@@ -20,5 +27,5 @@ pub async fn install(mc: &str, root: &Path, proxy: Option<&str>, retries: u32) -
     let jobs = crate::version::collect(&client, &vj).await?;
     println!("[*] 待下载: {} 个文件", jobs.len());
 
-    crate::download::run(&jobs, root, proxy, retries).await
+    crate::download::run(&jobs, root, proxy, retries, concurrency, piece_conns).await
 }
