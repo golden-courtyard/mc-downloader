@@ -3,7 +3,7 @@
 //! 只做「读归档里的 `modrinth.index.json` 并映射成 `PackSpec`」，
 //! 不碰下载、不碰加载器安装 —— 那些是流水线的事。
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::Read;
@@ -65,11 +65,11 @@ pub fn parse_index(text: &str) -> Result<PackSpec> {
     let mut skipped = 0usize;
     for f in idx.files {
         // 客户端跑不了的（多为仅服务端 mod）直接排除
-        if let Some(env) = &f.env {
-            if env.get("client").is_some_and(|c| c == "unsupported") {
-                skipped += 1;
-                continue;
-            }
+        if let Some(env) = &f.env
+            && env.get("client").is_some_and(|c| c == "unsupported")
+        {
+            skipped += 1;
+            continue;
         }
         let Some(url) = f.downloads.into_iter().next() else {
             // 没有下载地址的条目（规范允许）只能跳过

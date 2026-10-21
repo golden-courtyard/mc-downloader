@@ -12,7 +12,7 @@ pub mod loader;
 pub mod mrpack;
 pub mod spec;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;

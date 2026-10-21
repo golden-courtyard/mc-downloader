@@ -2,8 +2,8 @@
 //!
 //! 用原子变量而非锁 —— 16 个并发任务每写一块都更新，加锁会成为新瓶颈。
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]

@@ -77,15 +77,15 @@ impl Config {
         if self.tasks.is_empty() {
             anyhow::bail!("脚本里至少要有一个 [[task]]");
         }
-        if let Some(c) = self.download.concurrency {
-            if c == 0 || c > 1024 {
-                anyhow::bail!("download.concurrency 应在 1..=1024，收到 {c}");
-            }
+        if let Some(c) = self.download.concurrency
+            && (c == 0 || c > 1024)
+        {
+            anyhow::bail!("download.concurrency 应在 1..=1024，收到 {c}");
         }
-        if let Some(c) = self.download.piece_conns {
-            if c == 0 || c > 256 {
-                anyhow::bail!("download.piece_conns 应在 1..=256，收到 {c}");
-            }
+        if let Some(c) = self.download.piece_conns
+            && (c == 0 || c > 256)
+        {
+            anyhow::bail!("download.piece_conns 应在 1..=256，收到 {c}");
         }
         for (i, t) in self.tasks.iter().enumerate() {
             if let TaskSpec::Generic { size: Some(0), .. } = t {

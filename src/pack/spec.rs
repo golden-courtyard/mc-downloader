@@ -4,7 +4,7 @@
 //! 下游流水线只认这个结构。加一种格式 = 加一个 parser，加一种加载器 = 加一个 installer，
 //! 两者互不干扰。
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// 一个要被下载到实例目录的文件
 #[derive(Debug, Clone, PartialEq, Eq)]
