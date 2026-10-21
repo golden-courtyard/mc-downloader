@@ -9,13 +9,12 @@
 #
 # 场景：80mbit → 8mbit → 80mbit 三段阶跃（各 25s），看 --adaptive 的 AIMD 是否真的双向有效。
 #
-# ⚠ 为什么是**四臂**：同一个参数无法同时证两个命题（"别用参数凑判据"的反面）。
+# ⚠ 为什么是**三臂**：同一个参数无法同时证两个命题（"别用参数凑判据"的反面）。
 #
 #   | 臂 | 参数 | 命题 | 现判据 |
 #   | A | 1 连 + adaptive | AIMD **机制存在** | **只** cut ≥ 1 且 add ≥ 1；其余全诊断（n/k/m/seg2/seg3）|
 #   | B | 16 连 + adaptive | 高并发+慢链路 ⇒ **应退回固定并发并告警**（39765be 的守卫）| 告警 1 次且含 coarse_grain；disabled ≥ 1；add=0 且 cut=0；seg3 > 2×seg2 |
 #   | C | 16 连 + 无 tuner | 16 连基线的**归因证据**（见下）| tune 行 = 0；seg2/max 仅诊断 |
-#   | D | **1 连 + 无 tuner**（53s）| A 臂的**干净对照**（只到 seg2 窗口关闭）| **全诊断**（n/k/m），本轮不设判据 |
 #
 #   📌 **A 臂为什么只断言 cut/add，不再断言 seg2 收敛** —— 三条理由：
 #      ① **绝对阈值被环境越界**：C 臂（无 tuner）两轮 seg2 = 4.50M / 4.99M，**均 < 6.40M 下界**
@@ -25,15 +24,19 @@
 #      ③ **臂内剥零也不可用**：`m = seg2×n/(n−k)`，C 臂算得 **6.90M 同样 ≥ 6.40M**
 #         ⇒ 判据不能区分有无 tuner。注意：**`m` 有区分力**（A 8.04M vs C 6.90M，差 +16.5%），
 #         问题是**阈值无法从 2 个样本确定**（过拟合）+ 同配置未隔离，**不是 `m` 没用**。
-#      ⇒ 取舍：要"干净验收敛"需**同配置开关对照**，即 D 臂。D 臂用 53s（只要 seg2 窗口，
-#         不需要 seg3）=> 78+78+78+53 = 287s ≤ 300s（spec §4.1），**不必缩其他臂长**。
-#      ⚠ D 臂**本轮只出数据、不设判据**：先看 `D:m / D:k` 长什么样，再决定拿它做什么。
+#      ⇒ 取舍：**"降速后收敛"在任何一对臂上都没有可测落点**（这是参数空间问题，不是判据写法问题）：
+#          · 1 连（A vs 1 连无 tuner）：管子本来就吃满，tuner 无事可做 ⇒ m 无差
+#          · 16 连（B vs C）：tuner 该起作用，**但守卫在 80mbit 把 B 关掉** ⇒ B ≡ C
+#          · 让 16 连过守卫：8mbit 段一片 64s，减半生效要 64s，与 25s 段长冲突
+#        ⇒ 收敛质量由**本地限速源**那套用例覆盖（环境可控）；
+#          "1 连下 tuner 到底有没有可测贡献"这个悬案，用一次性探针
+#          `scripts/net_faults/probe_d.sh` 结掉（不进 run_all、不常驻本场景）。
 #
 #   📌 **C 臂的定位（不要说成"k 是环境产物"）**：
 #      C 臂（无 tuner, 16 连）能证明：**低带宽 + 高并发下，没有 tuner 也会出现零吞吐**
 #      （两轮 k = 5 / 9）⇒ 零吞吐**至少部分是**环境产物。
 #      ⚠ 但 C 是 16 连、A 是 1 连，**不能据此断言 A 臂的零也是环境的** —— 两者的 k 混着并发数差异。
-#      ⇒ 这正是加 D 臂（1 连无 tuner）的原因：只有 D 才能把 k 归因到"环境"还是"tuner"。
+#      ⇒ 要把 k 归因到"环境"还是"tuner"，需要 1 连无 tuner 的对照 —— 那就是 `probe_d.sh` 的用途。
 #
 #   ⚠ **A 臂的 `cut ≥ 1` 依赖流量抖动**：`cut` 的条件是 `delta < last_delta`。
 #      恒定速率源（delta 每 tick 精确相等）会一直走 `hold` ⇒ **cut = 0**。
@@ -183,7 +186,7 @@ start_origin "$SIZE_MB" "$EXPECT_SHA" || { echo "FAIL $NAME origin_failed"; exit
 
 # ── 跑一臂：起下载 → 按绝对时刻换挡 → 收工 ─────────────────────────────────
 run_arm() {
-    local tag="$1" conns="$2" adaptive="$3" arm_s="${4:-$ARM_S}"
+    local tag="$1" conns="$2" adaptive="$3"
     local dir="$OUT/aimd_$tag" csv="$OUT/logs/aimd_$tag.csv"
     rm -rf "$dir"
     mkdir -p "$dir"
@@ -193,7 +196,7 @@ run_arm() {
     t0="$(date +%s%N)"
 
     bash "$__NF_DIR/trace_rows.sh" "$csv" -- \
-        timeout "$arm_s" "$REAL_BIN" --adaptive="$adaptive" --piece-conns "$conns" \
+        timeout "$ARM_S" "$REAL_BIN" --adaptive="$adaptive" --piece-conns "$conns" \
         fetch "http://127.0.0.1:$PORT/blob.bin" --dir "$dir" --name t.bin &
     local dp=$!
 
@@ -254,7 +257,7 @@ check_aimd() {
     c="$(arm_stats "$OUT/logs/aimd_c.csv")"
 
     local a_seg2 a_seg3 a_add a_cut a_n2 a_zero2 a_m
-    local b_seg2 b_seg3 b_add b_cut b_zero2 b_n2 b_disabled c_seg2 c_max c_tune d_seg2 d_n2 d_zero2 d_m
+    local b_seg2 b_seg3 b_add b_cut b_zero2 b_n2 b_disabled c_seg2 c_max c_tune
     a_seg2="$(get seg2 "$a")"; a_seg3="$(get seg3 "$a")"
     a_add="$(get add "$a")";   a_cut="$(get cut "$a")"
     a_n2="$(get n2 "$a")";     a_zero2="$(get zero2 "$a")"
@@ -338,19 +341,6 @@ check_aimd() {
     if (( c_seg2 <= 0 )); then
         ok=1; detail+="C:seg2=0(8mbit 段无数据) "; fi
 
-    # D：1 连 + 无 tuner（干净对照）。**本轮只出数据、不定判据** ——
-    #    它的价值是回答"A 臂的零吞吐里有没有 tuner 的份"：D:k ≈ A:k ⇒ k 与 tuner 无关。
-    local d_csv="$OUT/logs/aimd_d.csv"
-    if [[ -f "$d_csv" ]]; then
-        local d; d="$(arm_stats "$d_csv")"
-        d_seg2="$(get seg2 "$d")"; d_n2="$(get n2 "$d")"; d_zero2="$(get zero2 "$d")"
-        d_m="$(awk -v s="$d_seg2" -v n="${d_n2:-0}" -v k="${d_zero2:-0}" \
-            'BEGIN{ dd = n - k; if (dd > 0) printf "%.0f", s*n/dd; else printf "0" }')"
-        detail+="D:n=$d_n2 D:k=$d_zero2 D:m=$d_m(全诊断) "
-    else
-        detail+="D:csv_missing(全诊断) "
-    fi
-
     ASSERT_DETAIL="$detail"
     return $ok
 }
@@ -362,8 +352,6 @@ echo "[*] 臂 B：--piece-conns 16（高并发回归）" >&2
 run_arm b 16 true  || { echo "FAIL $NAME armB_setup_failed"; exit 1; }
 echo "[*] 臂 C：--piece-conns 16 + --adaptive=false（对照）" >&2
 run_arm c 16 false || { echo "FAIL $NAME armC_setup_failed"; exit 1; }
-echo "[*] 臂 D：--piece-conns 1 + --adaptive=false（干净对照，53s，只到 seg2 窗口关闭）" >&2
-run_arm d 1 false 53 || { echo "FAIL $NAME armD_setup_failed"; exit 1; }
 
 rc=0
 check_aimd || rc=1
