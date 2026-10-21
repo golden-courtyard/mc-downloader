@@ -129,78 +129,48 @@ async fn main() -> Result<()> {
             let total = cfg.tasks.len();
             println!("[*] 脚本: {} （{} 个任务）", script.display(), total);
 
+            // 并行时把总并发均分，避免 N × concurrency 条连接炸掉
+            let n = cfg.tasks.len();
+            let per_task = if parallel {
+                (concurrency / n).max(1)
+            } else {
+                concurrency
+            };
             if parallel {
-                anyhow::bail!("--parallel 尚未实现（当前按声明顺序串行执行）");
+                println!(
+                    "[*] 并行模式：{n} 个任务，每任务并发 {}（总并发 {}）",
+                    per_task, concurrency
+                );
             }
 
-            for (i, task) in cfg.tasks.iter().enumerate() {
-                println!("\n===== [{}/{}] =====", i + 1, total);
-                match task {
-                    config::TaskSpec::Mc { version, dir } => {
-                        println!("[mc] {version} -> {dir}");
-                        vanilla::install(
-                            version,
-                            Path::new(dir),
+            if parallel {
+                // 任务级并行：总并发已均分，各任务互不争抢
+                let futs: Vec<_> = cfg
+                    .tasks
+                    .iter()
+                    .map(|task| {
+                        run_one_task(
+                            task,
                             proxy.as_deref(),
                             retries,
-                            concurrency,
+                            per_task,
                             piece_conns,
                             adaptive,
                         )
-                        .await?;
-                    }
-                    config::TaskSpec::Generic {
-                        url,
-                        dir,
-                        name,
-                        size,
-                        mirrors,
-                    } => {
-                        println!("[generic] {url}");
-                        let client = download::client(proxy.as_deref())?;
-                        let size = match size {
-                            Some(s) => *s,
-                            None => client
-                                .head(url)
-                                .send()
-                                .await?
-                                .content_length()
-                                .ok_or_else(|| anyhow::anyhow!("未返回 Content-Length，请显式给 size"))?,
-                        };
-                        let name = name.clone().unwrap_or_else(|| {
-                            url.rsplit('/').next().unwrap_or("download.bin").to_string()
-                        });
-                        let job = version::Job {
-                            url: url.clone(),
-                            path: name,
-                            sha1: None,
-                            size: Some(size),
-                            mirrors: mirrors.clone(),
-                        };
-                        download::run(
-                            &[job],
-                            Path::new(dir),
-                            proxy.as_deref(),
-                            retries,
-                            concurrency,
-                            piece_conns,
-                            adaptive,
-                        )
-                        .await?;
-                    }
-                    config::TaskSpec::Pack { file, dir } => {
-                        println!("[pack] {file} -> {dir}");
-                        modpack::install(
-                            Path::new(file),
-                            Path::new(dir),
-                            proxy.as_deref(),
-                            retries,
-                            concurrency,
-                            piece_conns,
-                            adaptive,
-                        )
-                        .await?;
-                    }
+                    })
+                    .collect();
+                futures::future::try_join_all(futs).await?;
+            } else {
+                for task in cfg.tasks.iter() {
+                    run_one_task(
+                        task,
+                        proxy.as_deref(),
+                        retries,
+                        concurrency,
+                        piece_conns,
+                        adaptive,
+                    )
+                    .await?;
                 }
             }
             println!("\n[+] 脚本执行完成：{} 个任务", total);
@@ -233,6 +203,87 @@ async fn main() -> Result<()> {
             println!("[*] 输出目录 : {}", dir.display());
             println!("[*] 网络     : {}", proxy.unwrap_or("直连"));
             modpack::install(&file, &dir, proxy, retries, concurrency, piece_conns, adaptive).await?;
+        }
+    }
+    Ok(())
+}
+
+/// 执行单个任务（抽出来是为了能 join_all 并行）
+async fn run_one_task(
+    task: &config::TaskSpec,
+    proxy: Option<&str>,
+    retries: u32,
+    concurrency: usize,
+    piece_conns: usize,
+    adaptive: bool,
+) -> Result<()> {
+    match task {
+        config::TaskSpec::Mc { version, dir } => {
+            println!("[mc] {version} -> {dir}");
+            vanilla::install(
+                version,
+                Path::new(dir),
+                proxy,
+                retries,
+                concurrency,
+                piece_conns,
+                adaptive,
+            )
+            .await?;
+        }
+        config::TaskSpec::Generic {
+            url,
+            dir,
+            name,
+            size,
+            mirrors,
+        } => {
+            println!("[generic] {url}");
+            let client = download::client(proxy)?;
+            let size = match size {
+                Some(s) => *s,
+                None => client
+                    .head(url)
+                    .send()
+                    .await?
+                    .content_length()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("服务器未返回 Content-Length，请在脚本里显式给 size")
+                    })?,
+            };
+            let name = name
+                .clone()
+                .unwrap_or_else(|| url.rsplit('/').next().unwrap_or("download.bin").to_string());
+            let job = version::Job {
+                url: url.clone(),
+                path: name,
+                sha1: None,
+                size: Some(size),
+                mirrors: mirrors.clone(),
+            };
+            download::run(
+                &[job],
+                Path::new(dir),
+                proxy,
+                retries,
+                concurrency,
+                piece_conns,
+                adaptive,
+            )
+            .await?;
+        }
+        config::TaskSpec::Pack { file, dir } => {
+            println!("[pack] {file} -> {dir}");
+            modpack::install(
+                Path::new(file),
+                Path::new(dir),
+                proxy,
+                retries,
+                concurrency,
+                piece_conns,
+                adaptive,
+            )
+            .await?;
         }
     }
     Ok(())
