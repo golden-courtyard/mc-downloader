@@ -26,10 +26,6 @@ impl Progress {
         self.done.fetch_add(n, Ordering::Relaxed);
     }
 
-    pub fn set_total(&self, total: u64) {
-        self.total.store(total, Ordering::Relaxed);
-    }
-
     pub fn done(&self) -> u64 {
         self.done.load(Ordering::Relaxed)
     }
