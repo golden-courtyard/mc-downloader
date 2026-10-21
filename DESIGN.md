@@ -147,3 +147,83 @@ Pending ──取到──> Inflight ──成功──> Done
 | **aria2** | `min-split-size` / `--max-tries` / 分片调度 | `importantClone/aria2` |
 | **DeepInfer** | block table / 动态队列 / 负载均衡 | `DEEPSEEKCLONE/DeepInfer` |
 | **mc-downloader v0.3** | 流式写盘 / SHA1 边写边算 / `.part` + rename | 本仓 |
+
+---
+
+## 八、待实现（v0.5+，已记录未开工）
+
+### 8.1 多源分配（EPLB 思路）
+
+**为什么暂缓**：**MC 场景里每个文件只有一条官方 URL**，没有"多镜像"可用。真正需要它的场景（开源镜像站、CDN 回源）不属于当前目标。
+
+**设计草案**（将来做时按此实现）：
+
+```
+同一文件的 mirrors: Vec<String>
+每个源维护 ewma_throughput（指数滑动平均）
+分配规则：
+  · 初始均分
+  · 每完成一片，更新该源吞吐
+  · 下一片优先分给吞吐最高的源
+  · 连续失败 N 次的源降权 / 摘除
+```
+
+**落点**：`source.rs`（`Job.mirrors: Vec<String>`，`PieceJob.url` 改为从 source 取）。
+
+**验收**：给一快一慢两个镜像，慢源分到的片数应显著少于快源。
+
+### 8.2 其他
+
+| 项 | 说明 |
+|---|---|
+| HTTP/3（QUIC）| 需要 `quinn`，且要求服务端支持；当前 CDN 多数只到 h2 |
+| 断点状态持久化 | 现在只靠"已存在且 SHA1 匹配"，进程被杀后 `.part` 里的分片进度丢失，重跑会从 0 开始 |
+| 分片级 SHA1 | 现在校验整文件（正确但需等全部下完）；Modrinth/原版 manifest 都只有全文件 SHA1，分片级需自建索引 |
+
+---
+
+## 九、高性能复制器（待评估）
+
+**观察**：复制与下载是同一类问题——**I/O 密集、瓶颈在介质带宽**，只是复制多一跳（读源 + 写目标），且没有网络延迟。
+
+**Windows 自带复制慢的真实原因**（不是"没多线程"）：
+
+- 小文件多时，**每个文件的 open/close 与元数据操作**是主要开销
+- 默认带缓冲复制在机械盘 / 网络盘上会**反复分配缓冲**
+- **没有利用 `CopyFileEx` 的内核态快速路径**（同卷复制可走 reflink/COW）
+
+**可行方向**（若要做，独立子命令 `copy`，不混进下载路径）：
+
+| 优化 | 手段 |
+|---|---|
+| **大文件** | `std::fs::copy`（Windows 走 `CopyFileEx`）+ 可选 `copy_file_range`（Linux）|
+| **小文件海量** | 多线程 worker + 目录树预扫描，按大小排序 |
+| **同盘复制** | 探测 reflink 支持（NTFS 的 `FSCTL_DUPLICATE_EXTENTS`、APFS/Btrfs 的 clone），可做到"秒完成" |
+| **校验** | 复用本仓 `sha1_file`（blocking 线程池）|
+| **进度** | 复用同一套记速器 |
+
+**判断**：**这是另一个产品，不是 mc-downloader 的一部分**。要不要做取决于是否有真实痛点（比如经常搬几十 GB 的数据集）。
+
+**如果做**，建议**独立 crate**（`fastcp`），共享 `piece` / `scheduler` / `progress` 三个模块。
+
+---
+
+## 十、内置记速器（v0.4.1）
+
+**现状**：只有"第 n/总 个文件"计数，**看不到速度和剩余时间**。
+
+**设计**：
+
+```rust
+pub struct Progress {
+    done: AtomicU64,        // 已传输字节
+    total: AtomicU64,       // 总字节（未知时为 0）
+    start: Instant,
+}
+// 后台任务每秒打印：
+//   [  12.3 MB / 39.6 MB ]  8.4 MB/s  ETA 00:03
+```
+
+**关键**：**用原子变量而非锁**——16 个并发任务每写一块都更新，加锁会成为新的瓶颈。
+
+**落点**：`progress.rs`，`download::run` 里创建并每秒打印一次；`one_split` 的 `fetch_piece` 也要 `add`。

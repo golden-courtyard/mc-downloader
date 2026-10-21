@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
 use crate::piece::PieceTable;
+use crate::progress::Progress;
 use crate::scheduler::{PieceJob, PieceScheduler};
 use crate::version::Job;
 
@@ -62,11 +63,16 @@ fn part_path(dst: &Path) -> PathBuf {
 pub async fn run(jobs: &[Job], root: &Path, proxy: Option<&str>, retries: u32) -> Result<()> {
     let client = client(proxy)?;
 
+    let total_bytes: u64 = jobs.iter().filter_map(|j| j.size).sum();
+    let pg = Progress::new(total_bytes);
+    let reporter = pg.spawn_reporter();
+
     let total = jobs.len();
     let stream = stream::iter(jobs.iter().cloned().map(|job| {
         let client = client.clone();
         let root = root.to_path_buf();
-        async move { one_with_retry(&client, &job, &root, retries).await }
+        let pg = pg.clone();
+        async move { one_with_retry(&client, &job, &root, retries, &pg).await }
     }))
     .buffer_unordered(CONCURRENCY);
 
@@ -85,6 +91,8 @@ pub async fn run(jobs: &[Job], root: &Path, proxy: Option<&str>, retries: u32) -
         }
     }
 
+    reporter.abort();
+
     println!(
         "[*] 新下载 {} 个，已存在 {} 个",
         done.saturating_sub(cached),
@@ -99,10 +107,11 @@ async fn one_with_retry(
     job: &Job,
     root: &Path,
     retries: u32,
+    pg: &Arc<Progress>,
 ) -> Result<(String, bool)> {
     let mut attempt = 0u32;
     loop {
-        match one(client, job, root, retries).await {
+        match one(client, job, root, retries, pg).await {
             Ok(v) => return Ok(v),
             Err(e) => {
                 if attempt >= retries {
@@ -121,6 +130,7 @@ async fn one(
     job: &Job,
     root: &Path,
     retries: u32,
+    pg: &Arc<Progress>,
 ) -> Result<(String, bool)> {
     let dst = root.join(&job.path);
 
@@ -142,17 +152,22 @@ async fn one(
 
     if let Some(size) = job.size {
         if size >= SPLIT_THRESHOLD {
-            one_split(client, job, &dst, size, retries).await?;
+            one_split(client, job, &dst, size, retries, pg).await?;
             return Ok((job.path.clone(), false));
         }
     }
 
-    one_stream(client, job, &dst).await?;
+    one_stream(client, job, &dst, pg).await?;
     Ok((job.path.clone(), false))
 }
 
 /// 单连接流式下载（小文件／服务器不支持 Range 时用）
-async fn one_stream(client: &reqwest::Client, job: &Job, dst: &Path) -> Result<()> {
+async fn one_stream(
+    client: &reqwest::Client,
+    job: &Job,
+    dst: &Path,
+    pg: &Arc<Progress>,
+) -> Result<()> {
     let resp = client.get(&job.url).send().await?.error_for_status()?;
 
     let tmp = part_path(dst);
@@ -166,6 +181,7 @@ async fn one_stream(client: &reqwest::Client, job: &Job, dst: &Path) -> Result<(
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.with_context(|| format!("读取响应流失败: {}", job.url))?;
         hasher.update(&chunk);
+        pg.add(chunk.len() as u64);
         file.write_all(&chunk).await?;
     }
     file.flush().await?;
@@ -195,10 +211,11 @@ async fn one_split(
     dst: &Path,
     size: u64,
     retries: u32,
+    pg: &Arc<Progress>,
 ) -> Result<()> {
     let table = PieceTable::new(size);
     if !table.is_split() {
-        return one_stream(client, job, dst).await;
+        return one_stream(client, job, dst, pg).await;
     }
 
     let tmp = part_path(dst);
@@ -232,11 +249,12 @@ async fn one_split(
         let s = sched.clone();
         let c = client.clone();
         let t = tmp.clone();
+        let pg = pg.clone();
         handles.push(tokio::spawn(async move {
             while let Some(pj) = s.next().await {
                 let mut attempt = 0u32;
                 loop {
-                    match fetch_piece(&c, &pj, &t).await {
+                    match fetch_piece(&c, &pj, &t, &pg).await {
                         Ok(()) => break,
                         Err(e) => {
                             if attempt >= retries {
@@ -271,7 +289,12 @@ async fn one_split(
 }
 
 /// 拉一个分片并写到指定偏移
-async fn fetch_piece(client: &reqwest::Client, pj: &PieceJob, path: &Path) -> Result<()> {
+async fn fetch_piece(
+    client: &reqwest::Client,
+    pj: &PieceJob,
+    path: &Path,
+    pg: &Arc<Progress>,
+) -> Result<()> {
     let resp = client
         .get(&pj.url)
         .header(
@@ -293,7 +316,9 @@ async fn fetch_piece(client: &reqwest::Client, pj: &PieceJob, path: &Path) -> Re
     let mut buf = Vec::with_capacity(expect);
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        buf.extend_from_slice(&chunk?);
+        let chunk = chunk?;
+        pg.add(chunk.len() as u64);
+        buf.extend_from_slice(&chunk);
     }
     if buf.len() != expect {
         anyhow::bail!(
