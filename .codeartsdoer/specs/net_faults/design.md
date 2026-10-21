@@ -62,11 +62,19 @@
 只允许这种形状，且**默认关闭**：
 
 ```rust
-// download.rs 的 tuner 循环内，紧随 available_permits() 之后
+// download.rs 的 tuner 循环内，紧随 add/cut 判定之后、更新 last_delta 之前
+// ⚠️ 字段随实现演进：2026-10-21（39765be）起为 act/budget/take/inflight/delta/last；
+//    更早版本是 act/avail/delta/last —— `avail` 已随 Semaphore 一起从 adaptive 路径移除。
+//    解析方请按「字段名」取值，**不要按位置切分，也不要假设列集合固定**。
 if std::env::var_os("MC_TUNE_LOG").is_some() {
-    eprintln!("[tune] avail={avail} delta={delta}");
+    eprintln!("[tune] act={act} budget={budget_now} take={take} inflight={inflight} delta={delta} last={last_delta}");
 }
 ```
+
+> **为什么写「字段会演进」而不只是把 `avail` 换成 `budget`**：只换名字，下一个人改实现时
+> 还会忘一次；写成「按名取值 + 允许演进」，这类漂移就不再是缺陷。
+> 实际消费方 `scripts/net_faults/trace_rows.sh` 正是**按名解析**（`case "$kv" in act=*) …`），
+> 所以字段增减只需要它跟着改解析分支，不涉及任何**按位置**切分的代码。
 
 三条约束：
 1. **只输出，不改任何状态** —— 不参与 `if delta > last_delta` 的判断
