@@ -36,8 +36,18 @@
 #    机制（implementer-2 给出，我用两组数据验过）：
 #         permits = conns + 净add；workers = 2×conns ⇒ avail = max(0, 净add − conns)
 #         ⇒ avail ≥ 2（cut 的前提）需要 **净 add ≥ conns + 2**
-#         代 tick 预算：25s≈12 tick ⇒ conns ≤ 10；78s≈38 tick ⇒ conns=16 也够（实测 22 次 add ≥ 18）。
+#         打印出来的 avail 是**本 tick 的 add 之前**读的（download.rs:431），故比累计值晚一 tick。
+#         代 tick 预算：要看到 cut，窗口 tick 数须 ≥ **conns + 3**
+#           （前 conns+2 个 tick 连续 add 把 avail 顶到 2，第 conns+3 个 tick 再遇 delta 下降）
+#           ⇒ 25s（≈12 tick）下 conns ≤ 9；78s（≈38 tick）下 conns ≤ 35。
+#           B 臂取 conns=16 对应 19 tick ≤ 38，有余量；25s 探针取 16 是**结构性不可能**。
+#         ⚠ 该条件是**必要不充分**：还需期间出现一次 delta 下降。实测 conns=4 / 12 tick 时
+#           tick 够（7≤12）但只拿到 6 次 add（正好 = conns+2），没有后续下降 ⇒ cut 仍为 0。
 #    现判据：cut 降为诊断，不参与 PASS/FAIL。
+#
+#    ⇒ **窗口本身也是判据前提**，且比参数更隐蔽：同一 conns=16，78s 出 4 次 cut、25s 出 0 次。
+#      改窗口 = 改判据可达性，改的人必须回头看这一段。
+#      本场景取 78s（ARM_S）正是为了让 B 臂的 cut 有机会出现；调小它会让 ③ 重新变成"不可达"。
 #
 # ── 一个必须写死的环境结论（两级，别只记一级）────────────────────────────
 #   16 连 + 8mbit 会周期性停摆（B 臂 4/23 tick 为零）并出现回补脉冲（C 臂单 tick 194 Mbps）。
