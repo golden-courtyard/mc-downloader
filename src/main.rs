@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use mc_downloader::download::DownloadOpts;
-use mc_downloader::{config, download, modpack, vanilla, version};
+use mc_downloader::{config, download, pack, vanilla, version};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -192,7 +192,7 @@ async fn main() -> Result<()> {
         Cmd::Pack { file, dir } => {
             println!("[*] 输出目录 : {}", dir.display());
             println!("[*] 网络     : {net}");
-            modpack::install(&file, &dir, &cli).await?;
+            pack::install(&file, &dir, &cli).await?;
         }
     }
     Ok(())
@@ -237,7 +237,7 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
         }
         config::TaskSpec::Pack { file, dir } => {
             println!("[pack] {file} -> {dir}");
-            modpack::install(Path::new(file), Path::new(dir), opts).await?;
+            pack::install(Path::new(file), Path::new(dir), opts).await?;
         }
     }
     Ok(())

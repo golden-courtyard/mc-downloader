@@ -7,7 +7,7 @@ pub mod config;
 pub mod download;
 pub mod fabric;
 pub mod manifest;
-pub mod modpack;
+pub mod pack;
 pub mod piece;
 pub mod progress;
 pub mod scheduler;
