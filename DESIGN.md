@@ -181,7 +181,7 @@ SHA256     本地 c3514bf0…274b == 官方 SHA256SUMS 同值  ✅
 
 ---
 
-## 八、待实现（v0.5+，已记录未开工）
+## 八、已知待办与已落地项
 
 ### 8.1 多源分配（已实现，2026-10-21）
 
@@ -213,9 +213,13 @@ SHA256     本地 c3514bf0…274b == 官方 SHA256SUMS 同值  ✅
 
 | 项 | 说明 |
 |---|---|
-| HTTP/3（QUIC）| 需要 `quinn`，且要求服务端支持；当前 CDN 多数只到 h2 |
-| 断点状态持久化 | 现在只靠"已存在且 SHA1 匹配"，进程被杀后 `.part` 里的分片进度丢失，重跑会从 0 开始 |
+| 断点状态持久化 | ✅ **已落地（v0.5，见 §11.4）**：位图旁挂 `<name>.part.state`，进程被杀后重跑只补缺口 |
 | 分片级 SHA1 | 现在校验整文件（正确但需等全部下完）；Modrinth/原版 manifest 都只有全文件 SHA1，分片级需自建索引 |
+| HTTP/3（QUIC）| 需要 `quinn`，且要求服务端支持；当前 CDN 多数只到 h2 |
+| `one_split` 仍偏长 | 已从 8 参数降到 6，但函数体仍有 ~200 行（建表/预分配/源池/调度/worker/tuner/校验/落盘）。下一轮可再拆成 `prepare` / `run_workers` / `finalize` 三段 |
+| CurseForge 格式 | 已能识别（`manifest.json`）并给出明确报错，未实现解析 |
+| Forge / NeoForge | 已能识别并报出要求版本，未实现（需跑官方 installer） |
+| 整合包多 URL | mrpack 的 `downloads[]` 是多 CDN 镜像，目前只取第一条、其余丢弃。要接得先测「按源分片」是否真比单源快 |
 
 ---
 
@@ -264,3 +268,102 @@ pub struct Progress {
 **关键**：**用原子变量而非锁**——16 个并发任务每写一块都更新，加锁会成为新的瓶颈。
 
 **落点**：`progress.rs`，`download::run` 里创建并每秒打印一次；`one_split` 的 `fetch_piece` 也要 `add`。
+
+---
+
+## 十一、v0.5 工程化重构（2026-10-21 已落地）
+
+> 背景：功能冻结，进入长期维护。新增能力基本只剩「更多整合包格式 / 加载器」，
+> 所以这次重构**只留那两处接缝**，其余一律不动。
+
+### 11.1 crate 形态：先拆 lib（其余改动的**前提**）
+
+原先是纯 bin crate ⇒ 模块是私有的 ⇒ 集成测试无从下手。
+拆成 `src/lib.rs`（11 个 pub mod）+ `src/main.rs`（只做 CLI 解析与分派）之后，
+此前 **929 行零测试**的 IO 密集代码第一次可测。
+
+> ⚠️ **副作用要记住**：`pub` 项在 lib 里不受 `dead_code` 检查。
+> 拆完 clippy 告警从 8 条掉到 2 条，**那是告警被藏起来，不是问题被解决**。
+> 清死代码得靠人工 grep，不能靠 clippy。
+
+### 11.2 模块地图
+
+| 层 | 文件 | 职责 |
+|---|---|---|
+| 入口 | `main.rs` | clap 解析、参数优先级合并、任务分派 |
+| 编排 | `vanilla.rs` `pack/mod.rs` | 各场景的流水线 |
+| 下载 | `download.rs` | 流式/分片分流、重试、多源、进度 |
+| 分片状态 | `piece.rs` | `PieceTable`（位图）+ `PieceState`（落盘） |
+| 调度 | `scheduler.rs` | `VecDeque` + `Notify` 的分片队列 |
+| 源选择 | `source.rs` | ewma 吞吐 + 失败降权 |
+| 格式解析 | `pack/mrpack.rs` `version.rs` `manifest.rs` | 外部 JSON → 内部结构 |
+| 加载器 | `pack/loader.rs` `fabric.rs` | 加载器 → 可启动的 `versions/<id>/` |
+
+**参数一律收进 `download::DownloadOpts`**（proxy / retries / concurrency /
+piece_conns / adaptive / timeout_secs）。别再往下透传裸参数——
+之前那串 5 个参数在 4 层函数里手工搬运，clippy 报过两次 `too many arguments`。
+
+### 11.3 整合包：两处接缝 + 一个中间表示
+
+```
+归档 ──parse──▶ PackSpec ──▶ 原版 ──▶ 加载器 ──▶ 文件 ──▶ 覆盖层
+     (可插拔)   (中间表示)                          (不变)
+```
+
+- **加一种格式** ⇒ 在 `pack/mod.rs::parse` 加一个分支 + 一个 parser，输出 `PackSpec`
+- **加一种加载器** ⇒ 在 `pack/spec.rs` 加 `Loader` 变体 + 在 `pack/loader.rs` 加实现
+- **两者互不影响**；中间三段（原版/文件/覆盖层）对所有格式都一样，别为了复用去改
+
+**识别 ≠ 支持**：`mrpack.rs` 能认出 Forge/NeoForge（报错带版本号），
+但 `Loader::check_supported()` 必须在**任何下载开始之前**调用——
+否则要下完几个 GB 才说「不支持」。
+
+### 11.4 分片级断点续传（v0.4 设计了但没接电）
+
+`PieceTable` 的位图状态机一直存在、8 个测试一直绿，但生产代码从没读过它 ⇒
+`.part` 里已下好的分片重跑时全部重下。v0.5 补上接线：
+
+- `one_split` 用 `table.pending()` 只排未完成片段，每片成功 `mark_done`
+- 位图旁挂落盘到 `<name>.part.state`，每 2 秒快照（崩溃最多丢 2 秒进度）
+- **不能靠稀疏文件推断已完成片段**：`set_len` 的空洞读出来是 0，
+  与「真的写入了 0 值字节」无法区分 —— 这是必须旁挂状态文件的唯一原因
+- 加载时逐项校验 `file_size / piece_size / total / 长度`，任一不符即作废重下；
+  宁可重下，不要拼出坏文件
+- 成品落盘后删除状态文件，避免与下一次的 `.part` 配错
+
+**状态文件格式**（小端，32 字节头 + 位图）：
+
+| 偏移 | 长度 | 内容 |
+|---|---|---|
+| 0 | 8 | magic `MCDLPC01` |
+| 8 | 8 | `file_size` |
+| 16 | 8 | `piece_size` |
+| 24 | 4 | `total`（分片数） |
+| 28 | 4 | `words`（位图 u64 个数） |
+| 32 | words×8 | 位图，每 bit 一片 |
+
+### 11.5 工程闸门
+
+CI 三道闸（`.github/workflows/ci.yml`）：
+
+```bash
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+cargo test --all-targets
+```
+
+配套：`.gitattributes` 全仓 `eol=lf`（此前 6 个文件是 CRLF，混排会让 rustfmt
+的 diff 变成整文件重写）；`Cargo.toml` 的 `rust-version = "1.99"` 声明最低版本。
+
+> ⚠️ **刻意不用 `rust-toolchain.toml` 钉 channel**：那会让 rustup 每次去同步
+> channel 元数据，离线或代理受限时**连 cargo 都跑不起来**（本机实测）。
+
+### 11.6 本机环境坑（会复发）
+
+- **增量编译缓存会坏**：症状是 `cargo build --tests` 卡在 `Compiling` 直到超时，
+  日志里先出现 `error deleting lock file ... os error 5 (拒绝访问)`。
+  绕法：`CARGO_INCREMENTAL=0 cargo test`。
+- **沙箱会掐停批量删除**：`cargo clean -p` 删到第 ~10 个文件即 SIGTERM，
+  于是缓存永远是半删状态。别指望 `cargo clean` 修它。
+- **`1.99.1` 这套 toolchain 是装坏的**（`rustup component list` 报
+  `missing manifest`）；能用的是 `stable`，而 `stable` 恰好就是 1.99.1。
