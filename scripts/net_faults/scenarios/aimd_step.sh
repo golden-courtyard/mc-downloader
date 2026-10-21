@@ -223,11 +223,25 @@ run_arm() {
 #   （段 2 的宽限从 2s 改成 7s，依据见文件头「seg2 窗口 7s 宽限」那条）
 #   （每段都掐掉换挡后的 2s 过渡，避免把 netem 切换瞬间算进稳态）
 arm_stats() {
+    # 统计量选择（主理人裁决）：
+    #   seg2 = 窗口内 tick 的**中位数**（不再用均值）—— 均值会被少量零 tick 拖低
+    #   m    = **非零 tick 的中位数**（不再用 seg2×n/(n−k)）—— 那个公式在 k 大时会把量
+    #          摊到少数 tick 上，k=10/18 时算出 139% 标称（物理不可能），是失真来源
+    #   m 的适用条件：k/n > 30% ⇒ 输出 NA（"零"成了主要状态，"非零中位数"代表不了真实速率）
     awk -F, '
+        # 中位数（对传入数组前 n 个元素做插入排序后取中位）
+        function med(a, n,    i, j, x, t) {
+            if (n <= 0) return 0
+            for (i = 2; i <= n; i++) { x = a[i]; j = i - 1
+                while (j > 0 && a[j] > x) { a[j+1] = a[j]; j-- }
+                a[j+1] = x }
+            if (n % 2) return a[(n+1)/2]
+            return (a[n/2] + a[n/2+1]) / 2
+        }
         NR == 1 { next }
         $2 == "tick" && $3 != "" {
             t = $1 + 0; v = $3 + 0
-            if (t >= 32000 && t < 50000)      { s2 += v; n2++; if (v > mx) mx = v; if (v == 0) z2++ }
+            if (t >= 32000 && t < 50000)      { seg2v[++n2] = v; s2 += v; if (v > mx) mx = v; if (v == 0) z2++ }
             else if (t >= 53000)              { s3 += v; n3++; if (v > mx) mx = v }
             else if (t < 23000)               { s1 += v; n1++; if (v > mx) mx = v }
         }
@@ -239,8 +253,17 @@ arm_stats() {
             if ($4 == "disabled") ndis++
         }
         END {
-            printf "seg1=%.0f seg2=%.0f seg3=%.0f max=%.0f tune=%d add=%d cut=%d hold=%d disabled=%d zero2=%d n2=%d\n",
-                   (n1 ? s1/n1 : 0), (n2 ? s2/n2 : 0), (n3 ? s3/n3 : 0), mx, nt, na, nc, nh, ndis, z2, n2
+            # seg2：中位数（并同时给出均值，供人工对比）
+            s2med = med(seg2v, n2)
+            s2mean = (n2 ? s2 / n2 : 0)
+            # m：非零 tick 的中位数；k/n > 30% ⇒ NA
+            nz = 0
+            for (i = 1; i <= n2; i++) if (seg2v[i] > 0) nzv[++nz] = seg2v[i]
+            majority_zero = (n2 > 0 && (z2 / n2) > 0.30)
+            if (majority_zero) mstr = "NA"
+            else               mstr = sprintf("%.0f", med(nzv, nz))
+            printf "seg1=%.0f seg2=%.0f seg2mean=%.0f m=%s seg3=%.0f max=%.0f tune=%d add=%d cut=%d hold=%d disabled=%d zero2=%d n2=%d\n",
+                   (n1 ? s1/n1 : 0), s2med, s2mean, mstr, (n3 ? s3/n3 : 0), mx, nt, na, nc, nh, ndis, z2, n2
         }' "$1"
 }
 
@@ -256,13 +279,15 @@ check_aimd() {
     b="$(arm_stats "$OUT/logs/aimd_b.csv")"
     c="$(arm_stats "$OUT/logs/aimd_c.csv")"
 
-    local a_seg2 a_seg3 a_add a_cut a_n2 a_zero2 a_m
+    local a_seg2 a_seg3 a_add a_cut a_n2 a_zero2 a_m a_seg2mean
     local b_seg2 b_seg3 b_add b_cut b_zero2 b_n2 b_disabled c_seg2 c_max c_tune
     a_seg2="$(get seg2 "$a")"; a_seg3="$(get seg3 "$a")"
     a_add="$(get add "$a")";   a_cut="$(get cut "$a")"
     a_n2="$(get n2 "$a")";     a_zero2="$(get zero2 "$a")"
-    a_m="$(awk -v s="$a_seg2" -v n="${a_n2:-0}" -v k="${a_zero2:-0}" \
-        'BEGIN{ d = n - k; if (d > 0) printf "%.0f", s*n/d; else printf "0" }')"
+    a_seg2mean="$(get seg2mean "$a")"
+    # m 由 arm_stats 直接给出（非零 tick 中位数）；空 = 触发了 majority_zero
+    a_m="$(get m "$a")"
+    [[ -z "$a_m" ]] && a_m="NA(majority_zero)"
     b_seg2="$(get seg2 "$b")"; b_seg3="$(get seg3 "$b")"
     b_add="$(get add "$b")";   b_cut="$(get cut "$b")"
     b_zero2="$(get zero2 "$b")"; b_n2="$(get n2 "$b")"
@@ -274,7 +299,7 @@ check_aimd() {
     if (( a_cut < 1 )); then ok=1; detail+="A:cut=0(expect>=1) "; else detail+="A:cut=$a_cut "; fi
     if (( a_add < 1 )); then ok=1; detail+="A:add=0(expect>=1) "; else detail+="A:add=$a_add "; fi
     # 诊断项：n / k 是 seg2 的分母与零计数，m = 非零 tick 均值（便于下一个人不必自己数 tick）
-    detail+="A:n=$a_n2 A:k=$a_zero2 A:m=$a_m A:seg2=$a_seg2 A:seg3=$a_seg3 "
+    detail+="A:n=$a_n2 A:k=$a_zero2 A:m=$a_m A:seg2=$a_seg2 A:seg2mean=$a_seg2mean A:seg3=$a_seg3 "
 
     # B：高并发 + 慢链路 ⇒ 应**退回固定并发并告警**（39765be 起的守卫行为）。
     #
