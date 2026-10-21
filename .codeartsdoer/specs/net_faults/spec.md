@@ -182,8 +182,10 @@
 
 - **必须**能按时间阶跃改变带宽（**bit 制，与 §5.1.1 档位同源**）：
   `80mbit → 8mbit → 80mbit`，**每段 ≥ 20s**
-- **必须**同时记录：每秒实测吞吐、`--adaptive` 的 worker/semaphore 变化
+- **必须**同时记录：每秒实测吞吐、`--adaptive` 的**并发预算变化**（`budget` / `take` / `inflight`）
   （需新增最小观测点，见 **`design §1.3 D6`**）
+  > ⚠️ 2026-10-21 起 adaptive 改用 budget 闸门，**不再有 semaphore / permit**；
+  > 旧观测点是 `avail`，已废弃（`39765be`）。
 - 这是 `--adaptive` **唯一**的验证途径（`DESIGN §8.2` 长期挂着）
 
 #### 验收条件
