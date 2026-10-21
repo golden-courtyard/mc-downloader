@@ -31,8 +31,12 @@ strip = true
 #   · 它会改变失败语义 —— 分片 worker 一 panic 整个进程就死，而 download.rs 里
 #     专门有一条 `Err(JoinError) => ...` 分支来接住 worker 崩溃、先 abort 掉
 #     flusher 再返回错误；abort 模式下那条分支永远走不到，续传状态也来不及落盘。
-#   · 本机沙箱拦 target/release 的写入，release 构建无法在本地验证（只有 CI 能跑），
-#     不加无法验证的运行时语义改动。
+#   · release 构建本身**已由 CI 验证**（见 .github/workflows/ci.yml 的
+#     `Build (release)` 步）；本地沙箱拦 target/release 的写入，本地跑不了而已。
+#   · 但 `panic = "abort"` 的差异是**运行时语义**，build 验证不出来 —— 要验证它
+#     必须往生产代码里插一个「按需故意 panic」的注入点，为测试污染生产路径，不划算。
+#   · 也不必额外跑 `cargo test --release`：`unsafe_code = "forbid"` 已经排除了
+#     LTO 改变语义的常见原因（UB），剩下的差异只在性能，不在正确性。
 
 # ── 语法 / 语言基线 ────────────────────────────────────────────────
 # edition 只是「允许」2024 的写法，下面的 lint 才让它变成「要求」。
