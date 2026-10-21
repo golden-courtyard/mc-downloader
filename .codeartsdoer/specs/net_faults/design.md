@@ -343,6 +343,7 @@ FAIL l2p_loss_20 rc=143 timeout=120s part_state=present(expect=absent)
 | **`iptables --reject-with tcp-reset`** | ✅ 可建 **⚠️ 删除需完整 spec** | 见 D2 rev3 后半；按行号删亦可行 |
 | 磁盘 | ✅ 51G 可用 | `df -h /home` |
 | **假源 listen backlog** | ⚠️ **必须 ≥ 场景最大并发（取 128）** | stdlib 默认 5 会丢 SYN → RTO 重传 → 耗时差 7–8 倍。实测与取值依据见 §2.2 |
+| **源端算力（GIL）** | ⚠️ **≥16 连的「吞吐 / 耗时 / 超时」类场景，必须先测源端单连基准** | ⚠️ **只写方法，不写阈值** —— 实测跨机器差 **20 倍**（同一份 `fakeorigin.py`：一台 `curl` 单连 375–383 Mbps，另一台 874–946 MB/s ≈ 7.5 Gbps）。写成常量就变成「换台机器就红」的新一类假判据。<br>做法：<br>`curl -s -o /dev/null -w '%{speed_download}\n' -H "Range: bytes=0-67108863" http://127.0.0.1:<port>/blob.bin`<br>N 连实测吞吐若明显低于 `N × 单连 × 0.7` ⇒ **先怀疑源端**（GIL / accept 队列），别记到客户端账上。<br>源端算力不足会把「源端慢」**伪装成「客户端慢」** —— 正是 D3 要排除的失真。<br>⚠️ **「正确性」类判据不受此限**（退出码 / 产物逐字节 / 无 EMFILE）—— 那些与源端快慢无关。<br>批次 3 最大只有 4 连 / 2 连，不受影响 |
 
 **结论：批次 2 全部解除，L2/L2′ 可以开工。**
 唯一遗留是 T2.3（VM 内装 Rust），不阻塞批次 3 之外的准备工作。
