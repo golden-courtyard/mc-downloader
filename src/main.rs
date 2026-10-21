@@ -169,12 +169,12 @@ async fn main() -> Result<()> {
             let client = download::client(&cli)?;
             let size = match size {
                 Some(s) => s,
-                None => client
-                    .head(&url)
-                    .send()
-                    .await?
-                    .content_length()
-                    .ok_or_else(|| anyhow::anyhow!("服务器未返回 Content-Length，请用 --size 指定"))?,
+                None => {
+                    let resp = client.head(&url).send().await?;
+                    download::header_content_length(&resp).ok_or_else(|| {
+                        anyhow::anyhow!("服务器未返回 Content-Length，请用 --size 指定")
+                    })?
+                }
             };
             println!("[*] URL  : {url}");
             println!("[*] 大小 : {size} bytes ({:.1} MB)", size as f64 / 1048576.0);
@@ -216,14 +216,12 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
             let client = download::client(opts)?;
             let size = match size {
                 Some(s) => *s,
-                None => client
-                    .head(url)
-                    .send()
-                    .await?
-                    .content_length()
-                    .ok_or_else(|| {
+                None => {
+                    let resp = client.head(url).send().await?;
+                    download::header_content_length(&resp).ok_or_else(|| {
                         anyhow::anyhow!("服务器未返回 Content-Length，请在脚本里显式给 size")
-                    })?,
+                    })?
+                }
             };
             let name = name
                 .clone()
