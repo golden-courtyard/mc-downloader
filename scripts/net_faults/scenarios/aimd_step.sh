@@ -57,7 +57,8 @@
 #    机制（implementer-2 给出，我用两组数据验过）：
 #         permits = conns + 净add；workers = 2×conns ⇒ avail = max(0, 净add − conns)
 #         ⇒ avail ≥ 2（cut 的前提）需要 **净 add ≥ conns + 2**
-#         打印出来的 avail 是**本 tick 的 add 之前**读的（download.rs:431），故比累计值晚一 tick。
+#         ⚠ 这条引用已失效，保留只为记录历史：旧版 avail 是「本 tick 的 add 之前」读的
+#           （39765be **之前**的 download.rs:431；该行现在是分片重试退避，avail 这个量也已不存在）。
 #         代 tick 预算：要看到 cut，窗口 tick 数须 ≥ **conns + 3**
 #           （前 conns+2 个 tick 连续 add 把 avail 顶到 2，第 conns+3 个 tick 再遇 delta 下降）
 #           ⇒ 25s（≈12 tick）下 conns ≤ 9；78s（≈38 tick）下 conns ≤ 35。
@@ -237,8 +238,10 @@ check_aimd() {
     #       （download.rs:325 `f.set_len(size)`），未写区域是空洞、**读出来全是 0**：
     #       实测 逻辑 1GB / 实占 416MB（臂A）· 尾 1MiB 非零字节 **0/1048576**。
     #       ⇒ 对 .part 算 sha 只反映"下了多少"，与内容正确性无关。
-    #       且 rename 只在全部 worker 正常收工时执行（download.rs:590），
-    #       被 timeout 杀掉时进程直接终止，rename 不可能发生 ⇒ **不是"不方便"，是"没有对象"**。
+    #       且**分片路径**的 rename 在 download.rs:590 —— 只有全部 worker 正常收工时才执行；
+    #       单流路径另有一处 rename（download.rs:269，流结束后）。本场景是 1GB/分片路径。
+    #       被 timeout 杀掉时进程直接终止，任何一处 rename 都不会发生
+    #       ⇒ **不是"不方便"，是"没有对象"**。
     #    内容正确性由批次 3/4 的 assert_sha 覆盖；本档只判「段趋势 + tuner/守卫动作」。
     #    （若将来要在这一档验内容，需加一条小素材的完成腿，例如 8MB / 约 8s。）
     #
