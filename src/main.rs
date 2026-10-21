@@ -3,6 +3,7 @@ mod fabric;
 mod manifest;
 mod modpack;
 mod piece;
+mod progress;
 mod scheduler;
 mod vanilla;
 mod version;
