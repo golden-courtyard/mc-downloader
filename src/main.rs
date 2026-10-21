@@ -1,17 +1,6 @@
-mod config;
-mod download;
-mod fabric;
-mod manifest;
-mod modpack;
-mod piece;
-mod progress;
-mod scheduler;
-mod source;
-mod vanilla;
-mod version;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use mc_downloader::{config, download, modpack, vanilla, version};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
