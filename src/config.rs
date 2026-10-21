@@ -15,8 +15,9 @@ pub struct Config {
     pub network: Network,
     #[serde(default)]
     pub download: Download,
-    #[serde(default)]
-    pub task: Task,
+    /// 任务清单，按声明顺序执行
+    #[serde(default, rename = "task")]
+    pub tasks: Vec<TaskSpec>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -39,33 +40,26 @@ pub struct Download {
     pub adaptive: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct Task {
-    /// "mc" | "generic"
-    pub mode: Option<String>,
-    #[serde(default)]
-    pub mc: McTask,
-    #[serde(default)]
-    pub generic: GenericTask,
-}
-
-#[derive(Debug, Deserialize, Default, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct McTask {
-    pub version: Option<String>,
-    pub dir: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct GenericTask {
-    pub url: Option<String>,
-    pub dir: Option<String>,
-    pub name: Option<String>,
-    pub size: Option<u64>,
-    /// 额外镜像（内容须与 url 相同）
-    pub mirrors: Option<Vec<String>>,
+/// 一个下载任务（`[[task]]` 数组元素，按 `kind` 区分）
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "kind", deny_unknown_fields)]
+pub enum TaskSpec {
+    /// 下载原版
+    #[serde(rename = "mc")]
+    Mc { version: String, dir: String },
+    /// 下载单个 URL
+    #[serde(rename = "generic")]
+    Generic {
+        url: String,
+        dir: String,
+        name: Option<String>,
+        size: Option<u64>,
+        #[serde(default)]
+        mirrors: Vec<String>,
+    },
+    /// 装 Modrinth 整合包
+    #[serde(rename = "pack")]
+    Pack { file: String, dir: String },
 }
 
 impl Config {
@@ -80,17 +74,8 @@ impl Config {
 
     /// 语义校验：不是类型错误，而是"值本身不成立"
     pub fn validate(&self) -> Result<()> {
-        if let Some(mode) = &self.task.mode {
-            let m = mode.to_ascii_lowercase();
-            if m != "mc" && m != "generic" {
-                anyhow::bail!("task.mode 只能是 \"mc\" 或 \"generic\"，收到 {mode:?}");
-            }
-            if m == "mc" && self.task.mc.version.is_none() {
-                anyhow::bail!("task.mode = \"mc\" 时必须提供 task.mc.version");
-            }
-            if m == "generic" && self.task.generic.url.is_none() {
-                anyhow::bail!("task.mode = \"generic\" 时必须提供 task.generic.url");
-            }
+        if self.tasks.is_empty() {
+            anyhow::bail!("脚本里至少要有一个 [[task]]");
         }
         if let Some(c) = self.download.concurrency {
             if c == 0 || c > 1024 {
@@ -100,6 +85,11 @@ impl Config {
         if let Some(c) = self.download.piece_conns {
             if c == 0 || c > 256 {
                 anyhow::bail!("download.piece_conns 应在 1..=256，收到 {c}");
+            }
+        }
+        for (i, t) in self.tasks.iter().enumerate() {
+            if let TaskSpec::Generic { size: Some(0), .. } = t {
+                anyhow::bail!("第 {} 个任务是 generic 且 size = 0，会导致不分片；请给真实大小或省略", i + 1);
             }
         }
         Ok(())
@@ -120,13 +110,20 @@ mod tests {
 
     #[test]
     fn parse_minimal() {
-        let cfg: Config = toml::from_str("").unwrap();
-        assert!(cfg.task.mode.is_none());
+        let src = r#"
+[[task]]
+kind = "mc"
+version = "26.3"
+dir = "D:/mc"
+"#;
+        let cfg: Config = toml::from_str(src).unwrap();
+        assert_eq!(cfg.tasks.len(), 1);
+        assert!(cfg.validate().is_ok());
         assert!(cfg.proxy_filtered().is_none());
     }
 
     #[test]
-    fn parse_full() {
+    fn parse_multi_task() {
         let src = r#"
 [network]
 proxy = "http://127.0.0.1:7897"
@@ -137,70 +134,85 @@ concurrency = 8
 piece_conns = 6
 adaptive = true
 
-[task]
-mode = "mc"
-
-[task.mc]
+[[task]]
+kind = "mc"
 version = "26.3"
 dir = "D:/mc"
+
+[[task]]
+kind = "generic"
+url = "https://a/x.iso"
+dir = "D:/dl"
+name = "x.iso"
+size = 100
+mirrors = ["https://b/x.iso", "https://c/x.iso"]
+
+[[task]]
+kind = "pack"
+file = "E:/FO.mrpack"
+dir = "D:/mc/FO"
 "#;
         let cfg: Config = toml::from_str(src).unwrap();
+        assert_eq!(cfg.tasks.len(), 3);
         assert_eq!(cfg.network.retry, Some(5));
         assert_eq!(cfg.download.concurrency, Some(8));
-        assert_eq!(cfg.download.adaptive, Some(true));
-        assert_eq!(cfg.task.mode.as_deref(), Some("mc"));
-        assert_eq!(cfg.task.mc.version.as_deref(), Some("26.3"));
-        assert_eq!(cfg.proxy_filtered().as_deref(), Some("http://127.0.0.1:7897"));
+        assert!(cfg.validate().is_ok());
+        match &cfg.tasks[1] {
+            TaskSpec::Generic { mirrors, .. } => assert_eq!(mirrors.len(), 2),
+            _ => panic!("第 2 个任务应是 generic"),
+        }
     }
 
     #[test]
     fn empty_proxy_means_direct() {
-        let cfg: Config = toml::from_str("[network]\nproxy = \"\"\n").unwrap();
-        assert!(cfg.proxy_filtered().is_none(), "空串应视为直连");
+        let cfg: Config = toml::from_str("[network]\nproxy = \"\"\n[[task]]\nkind=\"mc\"\nversion=\"1\"\ndir=\"d\"\n").unwrap();
+        assert!(cfg.proxy_filtered().is_none());
     }
 
     #[test]
     fn unknown_field_is_error() {
-        let r: std::result::Result<Config, _> = toml::from_str("[network]\nproxxy = \"x\"\n");
+        let src = "[network]\nproxxy = \"x\"\n";
+        let r: std::result::Result<Config, _> = toml::from_str(src);
         assert!(r.is_err(), "拼错字段名必须报错");
     }
 
     #[test]
-    fn validate_rejects_bad_mode() {
-        let cfg: Config = toml::from_str("[task]\nmode = \"ftp\"\n").unwrap();
-        assert!(cfg.validate().is_err());
+    fn unknown_task_kind_is_error() {
+        let src = "[[task]]\nkind = \"ftp\"\n";
+        let r: std::result::Result<Config, _> = toml::from_str(src);
+        assert!(r.is_err(), "未知 kind 必须报错");
     }
 
     #[test]
-    fn validate_requires_version_for_mc() {
-        let cfg: Config = toml::from_str("[task]\nmode = \"mc\"\n").unwrap();
-        assert!(cfg.validate().is_err());
+    fn empty_tasks_rejected() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(cfg.validate().is_err(), "没有 task 应报错");
     }
 
     #[test]
-    fn validate_requires_url_for_generic() {
-        let cfg: Config = toml::from_str("[task]\nmode = \"generic\"\n").unwrap();
-        assert!(cfg.validate().is_err());
-    }
-
-    #[test]
-    fn validate_rejects_zero_concurrency() {
-        let cfg: Config = toml::from_str("[download]\nconcurrency = 0\n").unwrap();
-        assert!(cfg.validate().is_err());
-    }
-
-    #[test]
-    fn generic_mirrors_parse() {
+    fn generic_size_zero_rejected() {
         let src = r#"
-[task]
-mode = "generic"
-[task.generic]
-url = "https://a/x.iso"
-size = 100
-mirrors = ["https://b/x.iso", "https://c/x.iso"]
+[[task]]
+kind = "generic"
+url = "https://a/x"
+dir = "d"
+size = 0
 "#;
         let cfg: Config = toml::from_str(src).unwrap();
-        assert_eq!(cfg.task.generic.mirrors.as_ref().unwrap().len(), 2);
-        assert!(cfg.validate().is_ok());
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn zero_concurrency_rejected() {
+        let src = "[download]\nconcurrency = 0\n[[task]]\nkind=\"mc\"\nversion=\"1\"\ndir=\"d\"\n";
+        let cfg: Config = toml::from_str(src).unwrap();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn mc_requires_fields() {
+        // 缺 version 应是类型错误
+        let r: std::result::Result<Config, _> = toml::from_str("[[task]]\nkind = \"mc\"\ndir = \"d\"\n");
+        assert!(r.is_err());
     }
 }

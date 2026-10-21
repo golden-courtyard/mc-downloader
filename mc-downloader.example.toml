@@ -1,42 +1,43 @@
-# mc-downloader 配置示例
+# mc-downloader 下载脚本示例
 #
-# 优先级：CLI 显式给 > 本文件 > 内置默认
-# 未知字段会直接报错（防止手误打错 key 却静默不生效）
+# 用法：mc-downloader run mc-downloader.example.toml
+#
+# 结构：
+#   [network]   全局网络
+#   [download]  全局并发
+#   [[task]]    任务清单，按声明顺序串行执行
+#
+# 未知字段会直接报错（防止拼错 key 却静默不生效）
 
 [network]
 # 空字符串 = 显式直连
 proxy = ""
-# 单文件失败重试次数（指数退避 1s/2s/4s…）
 retry = 3
-# 预留：单次请求超时（当前未接线）
-timeout_secs = 30
 
 [download]
-# 同时下载的文件数
 concurrency = 16
-# 单文件分片并发（实测 4 最优；8/16/32 反而更慢）
-piece_conns = 4
-# AIMD 自适应（worker 上限 = 2 × piece_conns）
+piece_conns = 4     # 实测 4 最优
 adaptive = false
 
-[task]
-# "mc" | "generic"
-mode = "mc"
-
-# ---------- mode = "mc" ----------
-[task.mc]
+# ---------- 任务 1：下载某个 MC 原版 ----------
+[[task]]
+kind = "mc"
 version = "26.3"
 dir = "D:/Games/.minecraft"
 
-# ---------- mode = "generic" ----------
-# 用 mode = "generic" 时改成下面这段（并把 mode 改成 "generic"）
-[task.generic]
+# ---------- 任务 2：装一个 Modrinth 整合包 ----------
+# [[task]]
+# kind = "pack"
+# file = "C:/Users/<you>/OneDrive/桌面/Fabulously.Optimized-v15.0.0-beta.2.mrpack"
+# dir = "D:/Games/mc-26.1.2"
+
+# ---------- 任务 3：下单个大文件（可带镜像）----------
+# [[task]]
+# kind = "generic"
 # url = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04/ubuntu-24.04.3-live-server-amd64.iso"
 # dir = "D:/Downloads"
-# name = "ubuntu.iso"
-# size = 3303444480
-# 额外镜像（内容须与 url 完全相同）
+# name = "ubuntu-24.04.3.iso"
+# size = 3303444480          # 省略则自动 HEAD 探测
 # mirrors = [
 #   "https://mirrors.ustc.edu.cn/ubuntu-releases/24.04/ubuntu-24.04.3-live-server-amd64.iso",
-#   "https://mirrors.aliyun.com/ubuntu-releases/24.04/ubuntu-24.04.3-live-server-amd64.iso",
 # ]
