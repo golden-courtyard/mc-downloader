@@ -20,7 +20,7 @@ jobs:
 
       - name: Toolchain
         run: |
-          rustup update stable --profile minimal
+          rustup update stable
           rustup component add rustfmt clippy
           cargo -V && rustc -V
 
