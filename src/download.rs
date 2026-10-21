@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
-use crate::piece::PieceTable;
+use crate::piece::{PieceState, PieceTable};
 use crate::progress::Progress;
 use crate::source::SourcePool;
 use crate::scheduler::{PieceJob, PieceScheduler};
@@ -105,8 +105,22 @@ async fn sha1_file(path: &Path) -> Result<String> {
     .await?
 }
 
-fn part_path(dst: &Path) -> PathBuf {
-    let ext = dst
+/// 从响应头读 `Content-Length`。
+///
+/// ⚠️ **不要用 `Response::content_length()`**：它取的是 **body 的 size_hint**，
+/// 而 HEAD 响应没有 body ⇒ 稳定返回 `Some(0)`。拿它当文件大小会让「不带 --size 的
+/// 探测」永远得到 0，于是静默退化成单连接不分片。
+pub fn header_content_length(resp: &reqwest::Response) -> Option<u64> {
+    resp.headers()
+        .get(reqwest::header::CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .parse::<u64>()
+        .ok()
+        .filter(|n| *n > 0)
+}
+
+fn part_path(dst: &Path) -> PathBuf {    let ext = dst
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| format!("{e}."))
@@ -271,17 +285,44 @@ async fn one_split(
     opts: &DownloadOpts,
     pg: &Arc<Progress>,
 ) -> Result<()> {
-    let table = PieceTable::new(size);
+    let mut table = PieceTable::new(size);
     if !table.is_split() {
         return one_stream(client, job, dst, pg).await;
     }
 
     let tmp = part_path(dst);
-    // 预分配（稀疏文件），保证后续按偏移写不越界
+
+    // 续传：`.part` 与 `.part.state` 同时有效才认这份进度。
+    // 只有 `.part` 没有状态文件时无法知道哪些片段完整（稀疏文件的空洞读出来是 0），
+    // 只能从头下 —— 宁可重下，不要拼出坏文件。
+    if tmp.exists() {
+        match PieceState::load(&tmp, size) {
+            Some(t) => {
+                if t.done_count() > 0 {
+                    println!(
+                        "[*] 续传：已完成 {}/{} 片，只补缺口",
+                        t.done_count(),
+                        t.total()
+                    );
+                    pg.add(t.done_bytes());
+                }
+                table = t;
+            }
+            None => println!("[*] 有 .part 但无有效进度记录，从头下载"),
+        }
+    }
+
+    // 预分配（稀疏文件），保证后续按偏移写不越界。
+    // **不能 `File::create`**：那会在续传时把已下好的内容截断清零。
     {
-        let f = std::fs::File::create(&tmp)
-            .with_context(|| format!("预分配失败: {}", tmp.display()))?;
-        f.set_len(size)?;
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&tmp)
+            .with_context(|| format!("打开临时文件失败: {}", tmp.display()))?;
+        if f.metadata()?.len() != size {
+            f.set_len(size)?;
+        }
     }
 
     // 多源：job.mirrors 非空时用它，否则只用 job.url
@@ -300,7 +341,10 @@ async fn one_split(
     }
 
     let sched = Arc::new(PieceScheduler::new());
-    let jobs: Vec<PieceJob> = (0..table.total())
+    // 只排未完成的片段：位图在这里第一次被真正读到
+    let jobs: Vec<PieceJob> = table
+        .pending()
+        .into_iter()
         .filter_map(|i| {
             let (s, e) = table.range(i)?;
             Some(PieceJob {
@@ -315,6 +359,8 @@ async fn one_split(
     let n_pieces = jobs.len();
     sched.push_many(jobs).await;
     sched.close(); // 不会再有新分片
+
+    let table = Arc::new(tokio::sync::Mutex::new(table));
 
     let conns = opts.piece_conns.min(n_pieces).max(1);
     // 自适应模式：worker 数按上限开，实际并发由 Semaphore 控制
@@ -338,6 +384,7 @@ async fn one_split(
         let pg = pg.clone();
         let pool = pool.clone();
         let sem = sem.clone();
+        let tbl = table.clone();
         handles.push(tokio::spawn(async move {
             while let Some(pj) = s.next().await {
                 let _permit = match &sem {
@@ -347,7 +394,10 @@ async fn one_split(
                 let mut attempt = 0u32;
                 loop {
                     match fetch_piece(&c, &pj, &t, &pg, &pool).await {
-                        Ok(()) => break,
+                        Ok(()) => {
+                            tbl.lock().await.mark_done(pj.piece_idx);
+                            break;
+                        }
                         Err(e) => {
                             if attempt >= retries {
                                 return Err(e.context(format!("分片 {} 重试耗尽", pj.piece_idx)));
@@ -393,11 +443,54 @@ async fn one_split(
         None => None,
     };
 
+    // 位图落盘：每 2 秒快照一次。
+    // 崩溃最多丢 2 秒的进度（重下几片），不值得为每一片做一次同步写。
+    let flusher = {
+        let p = tmp.clone();
+        let tbl = table.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(2));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let snap = tbl.lock().await.clone();
+                let p = p.clone();
+                match tokio::task::spawn_blocking(move || PieceState::save(&p, &snap)).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => eprintln!("[!] 进度状态写入失败: {e}"),
+                    Err(e) => eprintln!("[!] 进度状态任务失败: {e}"),
+                }
+            }
+        })
+    };
+
+    // 逐个收 worker：出错也要先停掉 flusher，否则后台任务会一直写状态
+    let mut worker_err: Option<anyhow::Error> = None;
     for h in handles {
-        h.await??;
+        match h.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                worker_err = Some(e);
+                break;
+            }
+            Err(join_err) => {
+                worker_err = Some(anyhow::anyhow!("分片 worker 异常退出: {join_err}"));
+                break;
+            }
+        }
     }
     if let Some(t) = tuner {
         t.abort();
+    }
+    flusher.abort();
+    if let Some(e) = worker_err {
+        return Err(e);
+    }
+    // 收尾再落一次：此刻位图应是全 done，供下次直接跳过
+    {
+        let snap = table.lock().await.clone();
+        let p = tmp.clone();
+        let _ = tokio::task::spawn_blocking(move || PieceState::save(&p, &snap)).await;
     }
 
     // 整文件校验（SHA1 是全文件的，不是分片的）
@@ -405,6 +498,7 @@ async fn one_split(
         let got = sha1_file(&tmp).await?;
         if got != *expect {
             let _ = tokio::fs::remove_file(&tmp).await;
+            PieceState::remove(&tmp);
             anyhow::bail!("sha1 不匹配 {}: got {} expect {}", job.path, got, expect);
         }
     }
@@ -412,6 +506,8 @@ async fn one_split(
     tokio::fs::rename(&tmp, dst)
         .await
         .with_context(|| format!("落盘失败: {}", dst.display()))?;
+    // 成品已落地，状态文件不再有意义；留着会和下次的 .part 配错
+    PieceState::remove(&tmp);
     Ok(())
 }
 
