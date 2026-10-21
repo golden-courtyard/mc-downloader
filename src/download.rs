@@ -9,8 +9,8 @@ use tokio::io::AsyncWriteExt;
 
 use crate::piece::{PieceState, PieceTable};
 use crate::progress::Progress;
-use crate::source::SourcePool;
 use crate::scheduler::{PieceJob, PieceScheduler};
+use crate::source::SourcePool;
 use crate::version::Job;
 
 /// 默认：同时下载的文件数
@@ -120,7 +120,8 @@ pub fn header_content_length(resp: &reqwest::Response) -> Option<u64> {
         .filter(|n| *n > 0)
 }
 
-fn part_path(dst: &Path) -> PathBuf {    let ext = dst
+fn part_path(dst: &Path) -> PathBuf {
+    let ext = dst
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| format!("{e}."))
@@ -184,10 +185,7 @@ async fn one_with_retry(
             Ok(v) => return Ok(v),
             Err(e) => {
                 if attempt >= opts.retries {
-                    return Err(e.context(format!(
-                        "{} 重试 {} 次仍失败",
-                        job.path, opts.retries
-                    )));
+                    return Err(e.context(format!("{} 重试 {} 次仍失败", job.path, opts.retries)));
                 }
                 tokio::time::sleep(Duration::from_secs(1u64 << attempt)).await;
                 attempt += 1;
