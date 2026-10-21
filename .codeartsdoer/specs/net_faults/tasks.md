@@ -458,6 +458,14 @@ PASS l2p_dup_10 rc=0 sha=ok   1048ms
   | 升速段（t ∈ [50,75)）| 吞吐**上升**；且**段内出现过 `act=add`** |
   | 对照 `--adaptive` 关闭 | 吞吐不高于 `piece_conns × 8mbit`，且 **`[tune]` 行数为 0** |
 
+- ⚠️⚠️ **`act=cut` 预期为 0 次，这本身就是本批要发现的东西**：
+  `download.rs:365-376` 里 `workers = 2×conns` 而 `Semaphore::new(conns)`，
+  只要还有片可下，**所有 permit 都被持有 ⇒ `available_permits()` 恒为 0**；
+  而切减半的分支要求 `avail > 1` ⇒ **永不触发**。
+  ⇒ **本 T5.2 的职责是如实记录，不是让它通过。** 若 `cut` 出现 0 次，
+  说明 `--adaptive` 的 MD 分支失效（已记入 `DESIGN §8.2` A 组，标「待实测确认」）。
+  ⚠️ **不要为了提高 `cut` 出现率去调 `--piece-conns`** —— 该条件与并发取值无关，是结构问题。
+
 - ⚠️ **`act=hold` 不等于 tuner 没动**：hold 表示"吞吐无明显变化"，本身是正常状态。
   判"没动"看的是**整段内 `add`/`cut` 一次都没出现**，不是"全是 hold"。
 - **失败判定**：若「关掉 adaptive 也收敛」→ 说明是 TCP 在自适应、**tuner 没起作用**，记为缺陷。
