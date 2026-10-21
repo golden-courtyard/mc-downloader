@@ -9,6 +9,7 @@ pub async fn install(
     retries: u32,
     concurrency: usize,
     piece_conns: usize,
+    adaptive: bool,
 ) -> Result<()> {
     let client = crate::download::client(proxy)?;
 
@@ -27,5 +28,5 @@ pub async fn install(
     let jobs = crate::version::collect(&client, &vj).await?;
     println!("[*] 待下载: {} 个文件", jobs.len());
 
-    crate::download::run(&jobs, root, proxy, retries, concurrency, piece_conns).await
+    crate::download::run(&jobs, root, proxy, retries, concurrency, piece_conns, adaptive).await
 }

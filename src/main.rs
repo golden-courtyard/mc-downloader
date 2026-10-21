@@ -38,6 +38,10 @@ struct Args {
     #[arg(long, global = true, default_value_t = download::DEFAULT_PIECE_CONNS)]
     piece_conns: usize,
 
+    /// 自适应连接数（AIMD：快则 +1，慢则减半；worker 上限为 2×piece-conns）
+    #[arg(long, global = true)]
+    adaptive: bool,
+
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -86,13 +90,14 @@ async fn main() -> Result<()> {
     let retries = args.retry;
     let concurrency = args.concurrency;
     let piece_conns = args.piece_conns;
+    let adaptive = args.adaptive;
 
     match args.cmd {
         Cmd::Vanilla { version, dir } => {
             println!("[*] 目标版本 : {version}");
             println!("[*] 输出目录 : {}", dir.display());
             println!("[*] 网络     : {}", proxy.unwrap_or("直连"));
-            vanilla::install(&version, &dir, proxy, retries, concurrency, piece_conns).await?;
+            vanilla::install(&version, &dir, proxy, retries, concurrency, piece_conns, adaptive).await?;
             println!("[+] 完成。用 PCL「添加游戏目录」指向该目录即可。");
         }
         Cmd::Fetch { url, dir, size, name, mirrors } => {
@@ -116,13 +121,13 @@ async fn main() -> Result<()> {
                 size: Some(size),
                 mirrors: mirrors.clone(),
             };
-            download::run(&[job], &dir, proxy, retries, concurrency, piece_conns).await?;
+            download::run(&[job], &dir, proxy, retries, concurrency, piece_conns, adaptive).await?;
             println!("[+] 完成 -> {}", dir.display());
         }
         Cmd::Pack { file, dir } => {
             println!("[*] 输出目录 : {}", dir.display());
             println!("[*] 网络     : {}", proxy.unwrap_or("直连"));
-            modpack::install(&file, &dir, proxy, retries, concurrency, piece_conns).await?;
+            modpack::install(&file, &dir, proxy, retries, concurrency, piece_conns, adaptive).await?;
         }
     }
     Ok(())
