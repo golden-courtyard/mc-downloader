@@ -217,6 +217,7 @@ SHA256     本地 c3514bf0…274b == 官方 SHA256SUMS 同值  ✅
 |---|---|
 | **完整性链缺口（三层）** | 依据 *Survivable Key Compromise in Software Update Systems*（CCS'10，被引 172）——软件更新必须认证**三类**信息：<br>① **内容层**：`version_manifest_v2.versions[].sha1` 与 `assetIndex.sha1/size` 官方都给了，我们的结构体没声明 → 白丢校验（改 3–4 行可补）<br>② **时效层（timeliness）**：**完全没有**。无版本号比较 ⇒ 攻击者塞一个旧 manifest，我们无从发现（回滚攻击）<br>③ **一致层（consistency）**：没有。无法发现"不同用户拿到不同版本"（split-view）<br>⚠️ **补两个 sha1 只修了①**，②③ 是设计级空白 |
 | **续传不带 `If-Range`** | `download.rs:527` 只发 `Range`，**无 ETag / Last-Modified 校验**。服务器上文件换了（MC 版本更新 / 镜像同步滞后 / CDN 缓存不一致）时，会把**旧前段 + 新后段**拼成一个跨版本的混合文件：有 sha1 能抓但要整文件重下；**`fetch` / `generic` 无 sha1 则静默交付坏文件**。<br>标准解法 `If-Range: <strong ETag>`：校验器变了让服务器回 200 全量，客户端从头下而不是拼接 |
+| **`--adaptive` 的 MD（减半）分支疑似死代码**<br>⚠️ **待 T5.2 实测确认** | `download.rs:365-376`：`workers = 2×conns`，而 `Semaphore::new(conns)` ⇒ 只要有片可下，**所有 permit 都被 worker 持有**，`available_permits()` **恒为 0**。<br>而 `:436` 的分支要求 `delta < last_delta && **avail > 1**` ⇒ **永不触发**。<br>⇒ tuner 实际是「**只增不减**」，不是 AIMD：`avail < workers`（= 2×conns）恒成立，所以只要吞吐上升就 `add`。<br>**修法方向**：减半条件不应依赖 `avail`，改成「当前并发 > 1」（有减的余地）即可。<br>**本 feature 不修**（net_faults 是测试设施，改 tuner 逻辑是另一个任务）—— 但 T5.2 若实测 `act=cut` 出现 **0 次**，即坐实此缺陷 |
 
 #### B. 协议与实现待办
 
