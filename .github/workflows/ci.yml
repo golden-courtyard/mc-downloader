@@ -8,8 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # 本机沙箱会拦 target/release 写入、增量编译缓存也常坏，
-  # 所以本地只能验证 debug；release 与 --locked 一致性交给这里。
+  # 关掉增量编译：本机增量缓存坏过（cargo build --tests 卡在 Compiling 直到超时），
+  # CI 上保持一致行为，也避免缓存 key 撞车时表现不一致。
   CARGO_INCREMENTAL: 0
 
 jobs:
@@ -42,5 +42,7 @@ jobs:
       - name: Test
         run: cargo test --all-targets --locked
 
+      # 本地也跑得了（CARGO_TARGET_DIR 指到仓库外即可绕开沙箱的路径限制）。
+      # 放这里是为了两件本地替代不了的事：Linux 平台，以及 --locked 的一致性。
       - name: Build (release)
         run: cargo build --release --locked

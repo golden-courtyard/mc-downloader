@@ -27,16 +27,27 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 lto = "thin"
 codegen-units = 1
 strip = true
-# 刻意**不设** panic = "abort"：
-#   · 它会改变失败语义 —— 分片 worker 一 panic 整个进程就死，而 download.rs 里
-#     专门有一条 `Err(JoinError) => ...` 分支来接住 worker 崩溃、先 abort 掉
-#     flusher 再返回错误；abort 模式下那条分支永远走不到，续传状态也来不及落盘。
-#   · release 构建本身**已由 CI 验证**（见 .github/workflows/ci.yml 的
-#     `Build (release)` 步）；本地沙箱拦 target/release 的写入，本地跑不了而已。
-#   · 但 `panic = "abort"` 的差异是**运行时语义**，build 验证不出来 —— 要验证它
-#     必须往生产代码里插一个「按需故意 panic」的注入点，为测试污染生产路径，不划算。
-#   · 也不必额外跑 `cargo test --release`：`unsafe_code = "forbid"` 已经排除了
-#     LTO 改变语义的常见原因（UB），剩下的差异只在性能，不在正确性。
+# 刻意**不设** panic = "abort" —— 2026-10-21 已实测（实验与原始输出留在
+# C:\hub\reference\rust\panic-lab\）：
+#
+#   unwind（当前）：worker panic → tokio 接成 JoinError → 下面那三态 match 的
+#                   第三分支可达 → abort flusher、落 .part.state、返回错误
+#                   → 进程正常退出。实测 path=Err(JoinError) is_panic=true。
+#   abort        ：panic 瞬间整个进程终止（实测 exit 0xc0000409），
+#                   那条 JoinError 分支**永远走不到**，收尾三步全部跳过，
+#                   .part.state 丢掉最后一次快照之后的进度。
+#
+# ⇒ 收益（少一份展开表、panic 路径略快）抵不上代价（把「单个分片 bug」
+#   升级成「整进程死、来不及落盘」，正好抵消分片级续传要保的东西）。
+# ⇒ 同时这也证明 `Err(join_err)` 那条分支不是死代码，unwind 下真实可达。
+#
+# 另：release 构建**本地跑得了**，不是「只有 CI 能跑」——沙箱只拦
+# <repo>/target/release 这个固定路径，用 CARGO_TARGET_DIR 指到仓库外即可：
+#   CARGO_TARGET_DIR=/tmp/mcd-rel cargo build --release --locked
+# 实测产出 4.48 MB 且跑通 vanilla 1.7.10 回归。
+#
+# 也不必额外跑 `cargo test --release`：`unsafe_code = "forbid"` 已经排除了
+# LTO 改变语义的常见原因（UB），剩下的差异只在性能，不在正确性。
 
 # ── 语法 / 语言基线 ────────────────────────────────────────────────
 # edition 只是「允许」2024 的写法，下面的 lint 才让它变成「要求」。
