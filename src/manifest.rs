@@ -16,8 +16,14 @@ pub struct Ver {
     pub kind: String,
 }
 
-pub async fn fetch() -> Result<Manifest> {
-    Ok(reqwest::get(URL).await?.json().await?)
+pub async fn fetch(client: &reqwest::Client) -> Result<Manifest> {
+    Ok(client
+        .get(URL)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?)
 }
 
 pub fn find<'a>(m: &'a Manifest, id: &str) -> Result<&'a Ver> {

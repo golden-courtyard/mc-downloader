@@ -7,16 +7,55 @@ use crate::version::Job;
 
 const CONCURRENCY: usize = 16;
 
-pub async fn run(jobs: &[Job], root: &Path) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .user_agent("mc-downloader/0.1")
-        .build()?;
+/// 统一构造 HTTP 客户端。
+///
+/// **默认直连**：Mojang CDN / Fabric meta / Modrinth CDN 在国内均直连可达
+/// （实测 26.3、1.7.10、Fabric profile、48 个模组都未走代理）。
+/// 只有显式传 `--proxy` 时才走代理 —— 与「代理按域名判，不是一律加」一致。
+pub fn client(proxy: Option<&str>) -> Result<reqwest::Client> {
+    let mut b = reqwest::Client::builder().user_agent("mc-downloader/0.2");
+    b = match proxy {
+        Some(p) => b.proxy(
+            reqwest::Proxy::all(p).with_context(|| format!("代理地址无效: {p}"))?,
+        ),
+        None => b.no_proxy(),
+    };
+    Ok(b.build()?)
+}
+
+/// 在 blocking 线程池里算文件 SHA1，避免阻塞 tokio worker
+async fn sha1_file(path: &Path) -> Result<String> {
+    let p = path.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<String> {
+        use std::io::Read;
+        let mut f = std::fs::File::open(&p)?;
+        let mut h = Sha1::new();
+        let mut buf = vec![0u8; 128 * 1024];
+        loop {
+            let n = f.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            h.update(&buf[..n]);
+        }
+        Ok(hex::encode(h.finalize()))
+    })
+    .await?
+}
+
+/// 在 blocking 线程池里算内存块 SHA1
+async fn sha1_bytes(data: Vec<u8>) -> Result<String> {
+    Ok(tokio::task::spawn_blocking(move || hex::encode(Sha1::digest(&data))).await?)
+}
+
+pub async fn run(jobs: &[Job], root: &Path, proxy: Option<&str>, retries: u32) -> Result<()> {
+    let client = client(proxy)?;
 
     let total = jobs.len();
     let stream = stream::iter(jobs.iter().cloned().map(|job| {
         let client = client.clone();
         let root = root.to_path_buf();
-        async move { one(&client, &job, &root).await }
+        async move { one_with_retry(&client, &job, &root, retries).await }
     }))
     .buffer_unordered(CONCURRENCY);
 
@@ -43,18 +82,45 @@ pub async fn run(jobs: &[Job], root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// 带重试：失败后指数退避重试（1s, 2s, 4s…）
+/// 参照 aria2 的 --max-tries / --retry-wait 思路 —— 48 个模组里一个抖动不该让整批失败。
+async fn one_with_retry(
+    client: &reqwest::Client,
+    job: &Job,
+    root: &Path,
+    retries: u32,
+) -> Result<(String, bool)> {
+    let mut attempt = 0u32;
+    loop {
+        match one(client, job, root).await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                if attempt >= retries {
+                    return Err(e.context(format!(
+                        "{} 重试 {retries} 次仍失败",
+                        job.path
+                    )));
+                }
+                let wait = 1u64 << attempt; // 1, 2, 4, 8…
+                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                attempt += 1;
+            }
+        }
+    }
+}
+
 async fn one(client: &reqwest::Client, job: &Job, root: &Path) -> Result<(String, bool)> {
     let dst = root.join(&job.path);
 
-    // 已存在且 sha1 匹配 => 跳过
+    // 已存在且 sha1 匹配 => 跳过（断点续传）
     if dst.exists() {
-        if let Some(expect) = &job.sha1 {
-            let data = tokio::fs::read(&dst).await?;
-            if hex::encode(Sha1::digest(&data)) == *expect {
-                return Ok((job.path.clone(), true));
+        match &job.sha1 {
+            Some(expect) => {
+                if sha1_file(&dst).await? == *expect {
+                    return Ok((job.path.clone(), true));
+                }
             }
-        } else {
-            return Ok((job.path.clone(), true));
+            None => return Ok((job.path.clone(), true)),
         }
     }
 
@@ -67,7 +133,7 @@ async fn one(client: &reqwest::Client, job: &Job, root: &Path) -> Result<(String
         .await?;
 
     if let Some(expect) = &job.sha1 {
-        let got = hex::encode(Sha1::digest(&bytes));
+        let got = sha1_bytes(bytes.to_vec()).await?;
         if got != *expect {
             anyhow::bail!("sha1 不匹配 {}: got {} expect {}", job.path, got, expect);
         }
