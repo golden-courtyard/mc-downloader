@@ -256,33 +256,58 @@
 
 > 前提：T0.6、T2.3、T2.4 全通过
 
-### T3.1 `rate` 四档
+### T3.1 `rate` 四档 —— ✅ **已完成（7/7 PASS）**
 
-- **输入**：`lib.sh`（`apply` / `run_case` / `assert_rate`）+ `fakeorigin.py` + `expected_sha1.txt`
-- **输出**：4 个场景
-  `scenarios/l2_rate_800kbit.sh` · `l2_rate_8mbit.sh` · `l2_rate_80mbit.sh` · `l2_rate_400mbit.sh`
-- **判据**：落盘 sha1 一致 **且** 实测吞吐 ∈ `[0.8×, 1.2×] × 目标 bps`
-- **验证**：`bash scenarios/l2_rate_8mbit.sh` → `PASS l2_rate_8mbit rate=... expect=8000000`
-- **注意**：`800kbit` 档下 16MB 文件约需 160s，**接近 `timeout_s` 上限**，
-  必要时该场景用 4MB 文件并在注释里写明
+- **实测判定行**：
+  ```
+  PASS l2_rate_800kbit rc=0 rate=748498    expect=800000    tol=0.2 sha=ok   90s
+  PASS l2_rate_8mbit   rc=0 rate=7588925   expect=8000000   tol=0.2 sha=ok   18s
+  PASS l2_rate_80mbit  rc=0 rate=72121293  expect=80000000  tol=0.2 sha=ok    2s
+  PASS l2_rate_400mbit rc=0 rate=370000628 expect=400000000 tol=0.2 sha=ok    3s
+  ```
+  换算 93.6% · 94.9% · 90.2% · 92.5%，全部落在 ±20% 内。
+- ⚠️ **`400mbit` 档必须用 128MB，不是 16MB**（实测修正）：
+  16MB 的观测窗口只有 ~400ms，其中约 90ms 是进程启动 + 长度探测 = **20% 开销**
+  ⇒ 实测会抖到 71.7%（卡下界）。128MB 后稳定 366–370 Mbps。
+  ⇒ ⭐ **原则：判据的观测窗口必须远大于被测程序的固定开销**，否则测到的是开销不是带宽。
+- ✅ **`8MB 真的 2 片`**（直接证据，非推断）：跑动中直读 `.part.state` 头部 ——
+  `8MB → total=2 piece_size=4MB` · `16MB → total=4` · `128MB → total=32`
+- **`800kbit` 档用 8MB**：16MB / 800kbit = 160s，超 `timeout_s ≤ 120`；8MB 正好 80s。
 
-### T3.2 `delay` 两档
+### T3.2 `delay` 两档 —— ✅ **已完成**
 
-- **输入**：同 T3.1
-- **输出**：`scenarios/l2_delay_20ms.sh` · `l2_delay_200ms.sh`
-- **判据**：完成且 sha1 一致；总耗时下界符合 `delay × 分片数 ÷ 并发`
-- **验证**：`bash scenarios/l2_delay_200ms.sh`
+```
+PASS l2_delay_20ms  rc=0 elapsed=2086ms  expect>=20ms  sha=ok    2s
+PASS l2_delay_200ms rc=0 elapsed=10870ms expect>=200ms sha=ok   11s
+```
 
-### T3.3 中途 RST
+- ⚠️ **200ms 档实测 10.9–11.5s，不是天真估计的 0.6s**：`netem delay` 在 `lo` 上**对两个方向都生效**
+  （RTT ≈ 400ms），加 TCP 慢启动，16MB / 4 连要 ~57 个 RTT。
+  这个数吃掉 spec 120s 预算的 1/10 —— **批次 5 的 AIMD 阶梯（每段 25s）要注意**。
+- ⚠️ **下界判据太弱**：20ms 档下界只有 20ms（实际 2086ms）、200ms 档下界 200ms（实际 10.9s），
+  只能拦住"delay 完全没生效"这类装配错误。
+  ⇒ **建议改成 `总耗时 ≥ delay × 2`（一个 RTT 往返）**，比 `delay × 分片数 ÷ 并发` 更贴物理。
 
-- **输入**：同 T3.1 + `iptables`
-- **输出**：`scenarios/l2_rst_mid.sh`
-- **手法**：下载到约 50% 时从另一进程注入 `REJECT --reject-with tcp-reset`
-- **判据（两条都要看）**：
-  1. 重试预算内恢复并完成 → `PASS`
-  2. 若报错退出：exit≠0 **且** `.part.state` 记录的分片数 > 0 **且** 下次重跑能续上
-- **验证**：`bash scenarios/l2_rst_mid.sh`
-- **要点**：这条测的是**进程活着时的 Err 分支**，与之前「强杀进程」测的不是同一条路径
+### T3.3 中途 RST —— ✅ **已完成（但判据②未触发，见下）**
+
+```
+PASS l2_rst_mid rc=0 recovered=yes rst_at=1707ms rst_kb=8192 elapsed=18757ms sha=ok   19s
+```
+
+- ⚠️ **两个参数必须改**（原设计"无 netem + 16MB + 4 连"**三者一起不可执行**）：
+  1. **加 `rate 50mbit`**：不加 netem 时 16MB 只 130ms，50% 在 65ms 处，
+     而 iptables 加规则往返 10–30ms ⇒ "打到一半"打不准，注入晚了等于没测。
+     加后窗口 2.6s，实测注入点 1454–1707ms。
+  2. **`--piece-conns` 4 → 2**：4 连时 4 个 4MB 片**对称完成**，`.part` 直到最后一刻才落盘
+     （实测 `du` 在 1s 内全程 0，而日志已显示 5.7MB）⇒ 判据②「`.part.state` 分片数 > 0」**永不成立**。
+     2 连时按序完成，50% 时已有 2 片落盘（`du=8192KB`）。
+- ⚠️ **判据②（报错退出 → state>0 → 下次能续上）本轮没走到**：两次都恢复了。
+  归因实验（RST 保持 0.6s / 6s / **40s**）—— **40s 仍 recovered=yes**（44.9s 完成）。
+  源码依据：`download.rs:175` 与 `:394` **两层重试**，`retries=3`，退避 `1<<attempt`（1+2+4s）
+  ⇒ 单分片约 7s，整包 3 轮，**总预算 28–40s**。
+  ⇒ **结论**：要触发判据②需 RST ≥ 60s 且 `TIMEOUT_S=120`（约 100s/次）。
+  **本 feature 不作为常规场景**——真实使用中"重试耗尽"极罕见，且它是设计意图之外的路径。
+  但**必须知道这个数**：批次 4 的 `l2p_loss_20` 若把连接全打死，失败前会先耗 30–40s 重试。
 
 ---
 
@@ -465,6 +490,27 @@
 ⚠️ **测量陷阱**：本机 loopback 下 128MB 的传输窗口只有 **96–175ms**、16MB 只有 **48ms**。
 用 `netstat` 轮询（单次 40–60ms）去测一个比轮询还短的窗口，**必然测不到峰值**。
 这类探针要用 `GetTcpTable`（~0.5ms/次），只记最大值。
+
+---
+
+### ⚠️ 每次起源前先杀旧源（实测踩过）
+
+同一端口只能有一个源。忘了杀 → `bind` 失败 → **第二个"对照"其实下的是旧数据**。
+实测：起第二个假源时旧源还在，"16MB 对照"又下了一次 8MB，峰值 3 被误读成"16MB 只有 2 片"，
+**差点把错误结论写进报告**。
+
+```bash
+pkill -f "^python3 .*fakeorigin.py"; sleep 0.5   # 用 ^ 锚定，别裸子串
+```
+
+### ⚠️ 失败前约 **28–40s** 都在重试（写死这个数）
+
+`download.rs:175` 与 `:394` 是**两层重试**，`retries=3`，退避 `1<<attempt`（1+2+4s）
+⇒ 单分片约 7s，整包 3 轮 ⇒ **总预算 28–40s**。
+实测：RST 持续 **40s** 仍然 `recovered=yes`（44.9s 完成）。
+
+⇒ 任何「期望超时 / 期望失败」的场景，`TIMEOUT_S` 与判据都要按这个数留余量，
+否则你测到的是"**还在重试中**"，不是"失败了"。
 
 ---
 
