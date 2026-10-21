@@ -426,25 +426,41 @@ PASS l2p_dup_10 rc=0 sha=ok   1048ms
   ⇒ **1GB 文件够用**（三段走完还剩 ~475MB，可继续跑完或提前收工）。
   ⚠️ 先确认 `fakeorigin.py` 的 1GB 是**流式生成**还是预生成 —— 预生成会吃 1GB 内存。
 - ⚠️ **`--adaptive` 必须写 `--adaptive=true`**：`main.rs:35` 是 `Option<bool>`，不带值会 `exit=2`。
-- **产物** `aimd_trace.csv`，列：`t_sec, act, delta, last, tput_bps`
-  —— ⚠️ **不要用 `avail`**：饱和状态下 permit 会被阻塞的 worker 立刻抢走，
+- **产物** `aimd_trace.csv`，两类事件混在一张表里按时间排序：
+
+  ```
+  t_ms, evt, tput_bps, act, delta, last, bytes
+  ```
+  - `evt` ∈ {`tick`, `tune`}
+  - `tput_bps` 只在 `tick` 行有值；`act`/`delta`/`last` 只在 `tune` 行有值
+
+  ⚠️ **不要用 `avail` 列**：饱和状态下 `add_permits(1)` 后阻塞的 worker 立刻抢走，
   读回来恒为 0，**看起来像"tuner 没动"（假阴性）**。用 `act`（`add`/`cut`/`hold`）。
 - **验证**：`bash scenarios/aimd_step.sh && head -3 /tmp/aimd_trace.csv`
 
-### T5.2 跑并归因
+### T5.2 跑并归因 —— ⚠️ **两个独立观测，别用一个判全部**
 
-- **输入**：T5.1 的 `aimd_trace.csv`
+⚠️⚠️ **`[tune]` 在 `delta == 0` 时静默**（`continue` 在打印之前），
+所以**丢包 / 重试的 30–40s 里本来就该一行都没有**。
+用它判"tuner 停没停"会得到**反的结论** —— 这和批次 4 那条「别把还在重试记成失败」是同一族：
+**拿缺失当证据**。
+
+| 观测 | 取自 | 判什么 | 地位 |
+|---|---|---|---|
+| **吞吐段** | `evt=tick` 行的 `tput_bps` 序列 | 降速收敛到 `8mbit` ±20% / 升速上升 | **主判据** |
+| **静默期** | 相邻两个 `evt=tune` 行的 `t_ms` 差 | tuner 是否卡住 | 辅助，**必须与 `tput_bps == 0` 同时成立才算"真没动"** |
+
 - **判据**：
 
   | 段 | 期望 |
   |---|---|
-  | 降速段（t ∈ [25,50)）| 吞吐收敛到 `8mbit` 的 ±20%；`act` 应出现 `cut` |
-  | 升速段（t ∈ [50,75)）| 吞吐**上升**；`act` 应出现 `add` |
+  | 降速段（t ∈ [25,50)）| 吞吐收敛到 `8mbit` 的 ±20%；且**段内出现过 `act=cut`** |
+  | 升速段（t ∈ [50,75)）| 吞吐**上升**；且**段内出现过 `act=add`** |
   | 对照 `--adaptive` 关闭 | 吞吐不高于 `piece_conns × 8mbit`，且 **`[tune]` 行数为 0** |
 
-- **失败判定**：若「关掉 adaptive 也收敛」→ 说明是 TCP 在自适应、**tuner 没起作用**，记为缺陷。
 - ⚠️ **`act=hold` 不等于 tuner 没动**：hold 表示"吞吐无明显变化"，本身是正常状态。
-  要判"没动"看的是**整段内 `add`/`cut` 一次都没出现**。
+  判"没动"看的是**整段内 `add`/`cut` 一次都没出现**，不是"全是 hold"。
+- **失败判定**：若「关掉 adaptive 也收敛」→ 说明是 TCP 在自适应、**tuner 没起作用**，记为缺陷。
 
 ---
 
