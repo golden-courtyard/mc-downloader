@@ -1,24 +1,30 @@
 use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};
 use sha1::{Digest, Sha1};
-use std::path::Path;
+use std::io::{Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
+use crate::piece::PieceTable;
+use crate::scheduler::{PieceJob, PieceScheduler};
 use crate::version::Job;
 
 const CONCURRENCY: usize = 16;
+/// 单文件分片时的并发连接数
+const PIECE_CONNS: usize = 4;
+/// 低于此大小不分片
+const SPLIT_THRESHOLD: u64 = 8 * 1024 * 1024;
 
 /// 统一构造 HTTP 客户端。
 ///
-/// **默认直连**：Mojang CDN / Fabric meta / Modrinth CDN 在国内均直连可达
-/// （实测 26.3、1.7.10、Fabric profile、48 个模组都未走代理）。
-/// 只有显式传 `--proxy` 时才走代理 —— 与「代理按域名判，不是一律加」一致。
+/// **默认直连**：Mojang CDN / Fabric meta / Modrinth CDN 在国内均直连可达。
+/// 只有显式传 `--proxy` 时才走代理。
 pub fn client(proxy: Option<&str>) -> Result<reqwest::Client> {
-    let mut b = reqwest::Client::builder().user_agent("mc-downloader/0.3");
+    let mut b = reqwest::Client::builder().user_agent("mc-downloader/0.4");
     b = match proxy {
-        Some(p) => b.proxy(
-            reqwest::Proxy::all(p).with_context(|| format!("代理地址无效: {p}"))?,
-        ),
+        Some(p) => b.proxy(reqwest::Proxy::all(p).with_context(|| format!("代理地址无效: {p}"))?),
         None => b.no_proxy(),
     };
     Ok(b.build()?)
@@ -42,6 +48,15 @@ async fn sha1_file(path: &Path) -> Result<String> {
         Ok(hex::encode(h.finalize()))
     })
     .await?
+}
+
+fn part_path(dst: &Path) -> PathBuf {
+    let ext = dst
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| format!("{e}."))
+        .unwrap_or_default();
+    dst.with_extension(format!("{ext}part"))
 }
 
 pub async fn run(jobs: &[Job], root: &Path, proxy: Option<&str>, retries: u32) -> Result<()> {
@@ -78,8 +93,7 @@ pub async fn run(jobs: &[Job], root: &Path, proxy: Option<&str>, retries: u32) -
     Ok(())
 }
 
-/// 带重试：失败后指数退避重试（1s, 2s, 4s…）
-/// 参照 aria2 的 --max-tries / --retry-wait 思路 —— 48 个模组里一个抖动不该让整批失败。
+/// 带重试：失败后指数退避（1s, 2s, 4s…）
 async fn one_with_retry(
     client: &reqwest::Client,
     job: &Job,
@@ -88,28 +102,26 @@ async fn one_with_retry(
 ) -> Result<(String, bool)> {
     let mut attempt = 0u32;
     loop {
-        match one(client, job, root).await {
+        match one(client, job, root, retries).await {
             Ok(v) => return Ok(v),
             Err(e) => {
                 if attempt >= retries {
-                    return Err(e.context(format!(
-                        "{} 重试 {retries} 次仍失败",
-                        job.path
-                    )));
+                    return Err(e.context(format!("{} 重试 {retries} 次仍失败", job.path)));
                 }
-                let wait = 1u64 << attempt; // 1, 2, 4, 8…
-                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                tokio::time::sleep(Duration::from_secs(1u64 << attempt)).await;
                 attempt += 1;
             }
         }
     }
 }
 
-/// 单文件：**流式写盘 + 边写边算 SHA1**，不再把整个文件读进内存。
-///
-/// 先写 `<file>.part`，校验通过再 rename —— 中断时不会留下一个
-/// 看起来"完整"但实际是半截的文件。
-async fn one(client: &reqwest::Client, job: &Job, root: &Path) -> Result<(String, bool)> {
+/// 单文件入口：大于 8 MB 且有 size 才分片，否则单连接流式。
+async fn one(
+    client: &reqwest::Client,
+    job: &Job,
+    root: &Path,
+    retries: u32,
+) -> Result<(String, bool)> {
     let dst = root.join(&job.path);
 
     // 已存在且 sha1 匹配 => 跳过（断点续传）
@@ -124,24 +136,26 @@ async fn one(client: &reqwest::Client, job: &Job, root: &Path) -> Result<(String
         }
     }
 
-    let resp = client
-        .get(&job.url)
-        .send()
-        .await?
-        .error_for_status()?;
-
     if let Some(parent) = dst.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    let tmp = dst.with_extension(format!(
-        "{}part",
-        dst.extension()
-            .and_then(|e| e.to_str())
-            .map(|e| format!("{e}."))
-            .unwrap_or_default()
-    ));
+    if let Some(size) = job.size {
+        if size >= SPLIT_THRESHOLD {
+            one_split(client, job, &dst, size, retries).await?;
+            return Ok((job.path.clone(), false));
+        }
+    }
 
+    one_stream(client, job, &dst).await?;
+    Ok((job.path.clone(), false))
+}
+
+/// 单连接流式下载（小文件／服务器不支持 Range 时用）
+async fn one_stream(client: &reqwest::Client, job: &Job, dst: &Path) -> Result<()> {
+    let resp = client.get(&job.url).send().await?.error_for_status()?;
+
+    let tmp = part_path(dst);
     let mut file = tokio::fs::File::create(&tmp)
         .await
         .with_context(|| format!("创建临时文件失败: {}", tmp.display()))?;
@@ -165,9 +179,140 @@ async fn one(client: &reqwest::Client, job: &Job, root: &Path) -> Result<(String
         }
     }
 
-    tokio::fs::rename(&tmp, &dst)
+    tokio::fs::rename(&tmp, dst)
         .await
         .with_context(|| format!("落盘失败: {}", dst.display()))?;
+    Ok(())
+}
 
-    Ok((job.path.clone(), false))
+/// 分片下载：Range GET + 按偏移写同一临时文件。
+///
+/// Windows 没有 `pwrite`，所以每个分片**独立打开一次文件句柄**再 seek+write
+/// —— 独立句柄的写指针互不干扰，跨平台安全。
+async fn one_split(
+    client: &reqwest::Client,
+    job: &Job,
+    dst: &Path,
+    size: u64,
+    retries: u32,
+) -> Result<()> {
+    let table = PieceTable::new(size);
+    if !table.is_split() {
+        return one_stream(client, job, dst).await;
+    }
+
+    let tmp = part_path(dst);
+    // 预分配（稀疏文件），保证后续按偏移写不越界
+    {
+        let f = std::fs::File::create(&tmp)
+            .with_context(|| format!("预分配失败: {}", tmp.display()))?;
+        f.set_len(size)?;
+    }
+
+    let sched = Arc::new(PieceScheduler::new());
+    let jobs: Vec<PieceJob> = (0..table.total())
+        .filter_map(|i| {
+            let (s, e) = table.range(i)?;
+            Some(PieceJob {
+                file_idx: 0,
+                piece_idx: i,
+                start: s,
+                end: e,
+                url: job.url.clone(),
+            })
+        })
+        .collect();
+    let n_pieces = jobs.len();
+    sched.push_many(jobs).await;
+    sched.close(); // 不会再有新分片
+
+    let conns = PIECE_CONNS.min(n_pieces).max(1);
+    let mut handles = Vec::new();
+    for _ in 0..conns {
+        let s = sched.clone();
+        let c = client.clone();
+        let t = tmp.clone();
+        handles.push(tokio::spawn(async move {
+            while let Some(pj) = s.next().await {
+                let mut attempt = 0u32;
+                loop {
+                    match fetch_piece(&c, &pj, &t).await {
+                        Ok(()) => break,
+                        Err(e) => {
+                            if attempt >= retries {
+                                return Err(e.context(format!("分片 {} 重试耗尽", pj.piece_idx)));
+                            }
+                            tokio::time::sleep(Duration::from_secs(1u64 << attempt)).await;
+                            attempt += 1;
+                        }
+                    }
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        }));
+    }
+    for h in handles {
+        h.await??;
+    }
+
+    // 整文件校验（SHA1 是全文件的，不是分片的）
+    if let Some(expect) = &job.sha1 {
+        let got = sha1_file(&tmp).await?;
+        if got != *expect {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            anyhow::bail!("sha1 不匹配 {}: got {} expect {}", job.path, got, expect);
+        }
+    }
+
+    tokio::fs::rename(&tmp, dst)
+        .await
+        .with_context(|| format!("落盘失败: {}", dst.display()))?;
+    Ok(())
+}
+
+/// 拉一个分片并写到指定偏移
+async fn fetch_piece(client: &reqwest::Client, pj: &PieceJob, path: &Path) -> Result<()> {
+    let resp = client
+        .get(&pj.url)
+        .header(
+            reqwest::header::RANGE,
+            format!("bytes={}-{}", pj.start, pj.end - 1),
+        )
+        .send()
+        .await?;
+
+    if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        anyhow::bail!(
+            "服务器不支持 Range（HTTP {}），无法分片: {}",
+            resp.status(),
+            pj.url
+        );
+    }
+
+    let expect = (pj.end - pj.start) as usize;
+    let mut buf = Vec::with_capacity(expect);
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        buf.extend_from_slice(&chunk?);
+    }
+    if buf.len() != expect {
+        anyhow::bail!(
+            "分片 {} 长度不符: {} != {}",
+            pj.piece_idx,
+            buf.len(),
+            expect
+        );
+    }
+
+    let p = path.to_path_buf();
+    let offset = pj.start;
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let mut f = std::fs::OpenOptions::new().write(true).open(&p)?;
+        f.seek(SeekFrom::Start(offset))?;
+        f.write_all(&buf)?;
+        Ok(())
+    })
+    .await??;
+
+    Ok(())
 }
