@@ -36,6 +36,18 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
+      # scripts/net_faults/ 下 12 个 shell 文件此前没有任何闸门（cargo 不管它们）。
+      # 只做语法检查：不跑场景（需要 root + netem，进不了 CI）。
+      - name: Shell syntax
+        run: |
+          n=0
+          for f in scripts/net_faults/*.sh scripts/net_faults/scenarios/*.sh; do
+            [ -e "$f" ] || continue
+            bash -n "$f" || { echo "syntax error: $f"; exit 1; }
+            n=$((n+1))
+          done
+          echo "shell syntax OK ($n files)"
+
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 
