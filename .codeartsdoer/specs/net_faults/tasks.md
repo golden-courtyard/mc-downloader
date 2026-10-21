@@ -408,26 +408,43 @@ PASS l2p_dup_10 rc=0 sha=ok   1048ms
 
 ## 批次 5 — AIMD 验证（1 个场景）
 
-### T5.1 阶跃脚本
+### T5.1 阶跃脚本 —— ⚠️ **素材尺寸必须按 2s tick 倒推，不能按 MB 数想当然**
 
-- **输入**：`lib.sh` + `MC_TUNE_LOG`（T0.7）+ `fakeorigin.py`
-- **输出**：`scenarios/aimd_step.sh`，序列 **`80mbit → 8mbit → 80mbit`**（bit 制，与 §5.1.1 同源），每段 25s
-- **产物（审计 G-04 要求「可机械判定」）**：`aimd_trace.csv`，列 `t_sec,bytes_delta,tput_bps,avail_permits`
-  —— 由脚本把进度行与 `[tune]` 行按时间戳对齐后写出，**不靠人读图**
+- **序列**：`80mbit → 8mbit → 80mbit`，每段 **25s**（共 75s）
+- ⚠️⚠️ **tuner 是 `interval(2s)` + `delta == 0` 就 `continue`**
+  ⇒ 传输必须在 75s 内**持续推进**，否则**一行 `[tune]` 都不会有**，等于没测。
+  ⇒ 实测（无限速本机）：16MB 40ms / 1GB **2.5s** ⇒ 两者都出 **0 行**；4GB 才有 3–5 行。
+- **素材尺寸算法**（每段传输量 = 段时长 × 该段带宽）：
+
+  | 段 | 带宽 | 25s 内传输 |
+  |---|---|---|
+  | 1 | 80mbit (10 MB/s) | 250 MB |
+  | 2 | 8mbit (1 MB/s) | 25 MB |
+  | 3 | 80mbit (10 MB/s) | 250 MB |
+  | | **合计** | **525 MB** |
+
+  ⇒ **1GB 文件够用**（三段走完还剩 ~475MB，可继续跑完或提前收工）。
+  ⚠️ 先确认 `fakeorigin.py` 的 1GB 是**流式生成**还是预生成 —— 预生成会吃 1GB 内存。
+- ⚠️ **`--adaptive` 必须写 `--adaptive=true`**：`main.rs:35` 是 `Option<bool>`，不带值会 `exit=2`。
+- **产物** `aimd_trace.csv`，列：`t_sec, act, delta, last, tput_bps`
+  —— ⚠️ **不要用 `avail`**：饱和状态下 permit 会被阻塞的 worker 立刻抢走，
+  读回来恒为 0，**看起来像"tuner 没动"（假阴性）**。用 `act`（`add`/`cut`/`hold`）。
 - **验证**：`bash scenarios/aimd_step.sh && head -3 /tmp/aimd_trace.csv`
 
 ### T5.2 跑并归因
 
 - **输入**：T5.1 的 `aimd_trace.csv`
-- **输出**：判定行 + 归因结论（写进 `report.md`）
 - **判据**：
+
   | 段 | 期望 |
   |---|---|
-  | 降速段（t ∈ [25,50)）| 吞吐收敛到 `8mbit` 的 ±20% |
-  | 升速段（t ∈ [50,75)）| 吞吐**上升**，且 `avail_permits` 单调不减 |
-  | 对照 `--adaptive` 关闭 | 吞吐不高于 `piece_conns × 8mbit` |
-- **验证**：`cat /tmp/aimd_trace.csv | awk -F, '...' ` 断言上面三条
-- **失败判定**：若「关掉 adaptive 也收敛」→ 说明是 TCP 在自适应、**tuner 没起作用**，记为缺陷
+  | 降速段（t ∈ [25,50)）| 吞吐收敛到 `8mbit` 的 ±20%；`act` 应出现 `cut` |
+  | 升速段（t ∈ [50,75)）| 吞吐**上升**；`act` 应出现 `add` |
+  | 对照 `--adaptive` 关闭 | 吞吐不高于 `piece_conns × 8mbit`，且 **`[tune]` 行数为 0** |
+
+- **失败判定**：若「关掉 adaptive 也收敛」→ 说明是 TCP 在自适应、**tuner 没起作用**，记为缺陷。
+- ⚠️ **`act=hold` 不等于 tuner 没动**：hold 表示"吞吐无明显变化"，本身是正常状态。
+  要判"没动"看的是**整段内 `add`/`cut` 一次都没出现**。
 
 ---
 
