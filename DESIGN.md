@@ -138,6 +138,23 @@ Pending ──取到──> Inflight ──成功──> Done
 
 **坦白**：**v0.4 对 mc-downloader 本身收益有限**（它的文件都小）。**真正的价值在「给大文件分发场景打底」**——这也是「不做通用下载器、要做特定场景」的落地。
 
+### 实测数据（2026-10-21，26.3 全量）
+
+```
+总文件数      5224
+体积          assets 475 MB · libraries 84 MB · versions 40 MB
+超过 8 MB     仅 5 个（0.096%）
+              assets/objects/85/853da…
+              libraries/com/ibm/icu/icu4j/78.3/icu4j-78.3.jar
+              libraries/it/unimi/dsi/fastutil/8.5.18/fastutil-8.5.18.jar
+              libraries/org/lwjgl/lwjgl-vulkan/3.4.3/lwjgl-vulkan-3.4.3.jar
+              versions/26.3/26.3.jar
+```
+
+**5224 个文件里只有 5 个走分片** —— **0.096%**。这是对"MC 场景收益有限"最直接的证据。
+
+**校验**：`26.3.jar` 41,483,720 字节，SHA1 与 manifest 一致；无 `.part` 残留。
+
 ---
 
 ## 七、参考实现
