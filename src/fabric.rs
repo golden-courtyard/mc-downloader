@@ -61,6 +61,7 @@ pub async fn install(
             url: format!("{}/{rel}", lib.url.trim_end_matches('/')),
             path: format!("libraries/{rel}"),
             sha1: None,
+            size: None,
         });
     }
 

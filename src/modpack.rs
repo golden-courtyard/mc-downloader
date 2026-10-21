@@ -91,6 +91,7 @@ pub async fn install(pack: &Path, root: &Path, proxy: Option<&str>, retries: u32
             url: url.clone(),
             path: f.path.clone(),
             sha1: f.hashes.get("sha1").cloned(),
+                size: None,
         });
     }
     if skipped > 0 {
