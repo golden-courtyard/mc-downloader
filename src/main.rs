@@ -12,7 +12,7 @@ mod version;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
@@ -43,10 +43,6 @@ struct Args {
     #[arg(long, global = true)]
     adaptive: Option<bool>,
 
-    /// 配置文件（TOML）。CLI 显式给出的参数优先于配置文件
-    #[arg(long, global = true)]
-    config: Option<PathBuf>,
-
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -60,6 +56,14 @@ enum Cmd {
         /// 目标 .minecraft 目录
         #[arg(short, long, default_value = ".")]
         dir: PathBuf,
+    },
+    /// 按下载脚本执行（脚本里可以有多个 [[task]]）
+    Run {
+        /// 脚本路径（TOML）
+        script: PathBuf,
+        /// 任务并行执行（默认串行）
+        #[arg(long)]
+        parallel: bool,
     },
     /// 下载单个 URL（验证分片用；不给 size 时先 HEAD 探测）
     Fetch {
@@ -92,25 +96,13 @@ enum Cmd {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // 配置加载
-    let cfg = match &args.config {
-        Some(p) => config::Config::load(p)?,
-        None => config::Config::default(),
-    };
-
-    // 优先级：CLI > 配置 > 默认
-    let proxy_owned = args.proxy.clone().or_else(|| cfg.proxy_filtered());
+    // CLI 显式给 > 默认（脚本模式下由 run 分支自行读取脚本里的值）
+    let proxy_owned = args.proxy.clone();
     let proxy = proxy_owned.as_deref();
-    let retries = args.retry.or(cfg.network.retry).unwrap_or(3);
-    let concurrency = args
-        .concurrency
-        .or(cfg.download.concurrency)
-        .unwrap_or(download::DEFAULT_CONCURRENCY);
-    let piece_conns = args
-        .piece_conns
-        .or(cfg.download.piece_conns)
-        .unwrap_or(download::DEFAULT_PIECE_CONNS);
-    let adaptive = args.adaptive.or(cfg.download.adaptive).unwrap_or(false);
+    let retries = args.retry.unwrap_or(3);
+    let concurrency = args.concurrency.unwrap_or(download::DEFAULT_CONCURRENCY);
+    let piece_conns = args.piece_conns.unwrap_or(download::DEFAULT_PIECE_CONNS);
+    let adaptive = args.adaptive.unwrap_or(false);
 
     match args.cmd {
         Cmd::Vanilla { version, dir } => {
@@ -119,6 +111,99 @@ async fn main() -> Result<()> {
             println!("[*] 网络     : {}", proxy.unwrap_or("直连"));
             vanilla::install(&version, &dir, proxy, retries, concurrency, piece_conns, adaptive).await?;
             println!("[+] 完成。用 PCL「添加游戏目录」指向该目录即可。");
+        }
+        Cmd::Run { script, parallel } => {
+            let cfg = config::Config::load(&script)?;
+            let proxy = cfg.proxy_filtered();
+            let retries = args.retry.or(cfg.network.retry).unwrap_or(3);
+            let concurrency = args
+                .concurrency
+                .or(cfg.download.concurrency)
+                .unwrap_or(download::DEFAULT_CONCURRENCY);
+            let piece_conns = args
+                .piece_conns
+                .or(cfg.download.piece_conns)
+                .unwrap_or(download::DEFAULT_PIECE_CONNS);
+            let adaptive = args.adaptive.or(cfg.download.adaptive).unwrap_or(false);
+
+            let total = cfg.tasks.len();
+            println!("[*] 脚本: {} （{} 个任务）", script.display(), total);
+
+            if parallel {
+                anyhow::bail!("--parallel 尚未实现（当前按声明顺序串行执行）");
+            }
+
+            for (i, task) in cfg.tasks.iter().enumerate() {
+                println!("\n===== [{}/{}] =====", i + 1, total);
+                match task {
+                    config::TaskSpec::Mc { version, dir } => {
+                        println!("[mc] {version} -> {dir}");
+                        vanilla::install(
+                            version,
+                            Path::new(dir),
+                            proxy.as_deref(),
+                            retries,
+                            concurrency,
+                            piece_conns,
+                            adaptive,
+                        )
+                        .await?;
+                    }
+                    config::TaskSpec::Generic {
+                        url,
+                        dir,
+                        name,
+                        size,
+                        mirrors,
+                    } => {
+                        println!("[generic] {url}");
+                        let client = download::client(proxy.as_deref())?;
+                        let size = match size {
+                            Some(s) => *s,
+                            None => client
+                                .head(url)
+                                .send()
+                                .await?
+                                .content_length()
+                                .ok_or_else(|| anyhow::anyhow!("未返回 Content-Length，请显式给 size"))?,
+                        };
+                        let name = name.clone().unwrap_or_else(|| {
+                            url.rsplit('/').next().unwrap_or("download.bin").to_string()
+                        });
+                        let job = version::Job {
+                            url: url.clone(),
+                            path: name,
+                            sha1: None,
+                            size: Some(size),
+                            mirrors: mirrors.clone(),
+                        };
+                        download::run(
+                            &[job],
+                            Path::new(dir),
+                            proxy.as_deref(),
+                            retries,
+                            concurrency,
+                            piece_conns,
+                            adaptive,
+                        )
+                        .await?;
+                    }
+                    config::TaskSpec::Pack { file, dir } => {
+                        println!("[pack] {file} -> {dir}");
+                        modpack::install(
+                            Path::new(file),
+                            Path::new(dir),
+                            proxy.as_deref(),
+                            retries,
+                            concurrency,
+                            piece_conns,
+                            adaptive,
+                        )
+                        .await?;
+                    }
+                }
+            }
+            println!("\n[+] 脚本执行完成：{} 个任务", total);
         }
         Cmd::Fetch { url, dir, size, name, mirrors } => {
             let client = download::client(proxy)?;
