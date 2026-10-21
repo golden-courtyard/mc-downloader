@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
+use crate::download::DownloadOpts;
 use crate::version::Job;
 
 #[derive(Debug, Deserialize)]
@@ -26,15 +27,7 @@ struct PackFile {
 }
 
 /// 装一个 Modrinth 格式整合包（.mrpack / 同样结构的 .zip）
-pub async fn install(
-    pack: &Path,
-    root: &Path,
-    proxy: Option<&str>,
-    retries: u32,
-    concurrency: usize,
-    piece_conns: usize,
-    adaptive: bool,
-) -> Result<()> {
+pub async fn install(pack: &Path, root: &Path, opts: &DownloadOpts) -> Result<()> {
     println!("[*] 读取 {}", pack.display());
 
     let file = std::fs::File::open(pack).with_context(|| "打不开整合包文件")?;
@@ -74,10 +67,10 @@ pub async fn install(
     println!("[*] 模组  : {} 个", idx.files.len());
 
     // ① 原版
-    crate::vanilla::install(&mc, root, proxy, retries, concurrency, piece_conns, adaptive).await?;
+    crate::vanilla::install(&mc, root, opts).await?;
 
     // ② Fabric
-    let inst_id = crate::fabric::install(&mc, &loader, root, proxy, retries, concurrency, piece_conns, adaptive).await?;
+    let inst_id = crate::fabric::install(&mc, &loader, root, opts).await?;
 
     // ③ 模组（按 Modrinth 的 path 落到实例目录）
     let inst = root.join("versions").join(&inst_id);
@@ -106,7 +99,7 @@ pub async fn install(
     if skipped > 0 {
         println!("[*] 跳过 client=unsupported 的 {skipped} 个");
     }
-    crate::download::run(&jobs, &inst, proxy, retries, concurrency, piece_conns, adaptive).await?;
+    crate::download::run(&jobs, &inst, opts).await?;
 
     // ④ overrides / client-overrides
     let mut copied = 0usize;

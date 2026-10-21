@@ -1,12 +1,13 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use mc_downloader::download::DownloadOpts;
 use mc_downloader::{config, download, modpack, vanilla, version};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
     name = "mc-downloader",
-    about = "从 Mojang 官方 CDN 下载 Minecraft，或安装 Modrinth 格式整合包"
+    about = "从 Mojang 官方 CDN 下载 Minecraft，或安装整合包"
 )]
 struct Args {
     /// 代理地址，例如 http://127.0.0.1:7897
@@ -31,6 +32,10 @@ struct Args {
     /// 自适应连接数（AIMD：快则 +1，慢则减半；worker 上限为 2×piece-conns）
     #[arg(long, global = true)]
     adaptive: Option<bool>,
+
+    /// 建连超时与单次读超时（秒，默认 30）。不是整请求总时限
+    #[arg(long, global = true)]
+    timeout: Option<u64>,
 
     #[command(subcommand)]
     cmd: Cmd,
@@ -85,87 +90,83 @@ enum Cmd {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // CLI 显式给 > 默认（脚本模式下由 run 分支自行读取脚本里的值）
-    let proxy_owned = args.proxy.clone();
-    let proxy = proxy_owned.as_deref();
-    let retries = args.retry.unwrap_or(3);
-    let concurrency = args.concurrency.unwrap_or(download::DEFAULT_CONCURRENCY);
-    let piece_conns = args.piece_conns.unwrap_or(download::DEFAULT_PIECE_CONNS);
-    let adaptive = args.adaptive.unwrap_or(false);
+    // CLI 显式给 > 内置默认（脚本模式下，`run` 分支再叠加配置文件的值）
+    let dflt = DownloadOpts::default();
+    let cli = DownloadOpts {
+        proxy: args.proxy.clone().filter(|p| !p.trim().is_empty()),
+        retries: args.retry.unwrap_or(dflt.retries),
+        concurrency: args.concurrency.unwrap_or(dflt.concurrency),
+        piece_conns: args.piece_conns.unwrap_or(dflt.piece_conns),
+        adaptive: args.adaptive.unwrap_or(dflt.adaptive),
+        timeout_secs: args.timeout.unwrap_or(dflt.timeout_secs),
+    };
+    let net = cli.proxy.as_deref().unwrap_or("直连");
 
     match args.cmd {
         Cmd::Vanilla { version, dir } => {
             println!("[*] 目标版本 : {version}");
             println!("[*] 输出目录 : {}", dir.display());
-            println!("[*] 网络     : {}", proxy.unwrap_or("直连"));
-            vanilla::install(&version, &dir, proxy, retries, concurrency, piece_conns, adaptive).await?;
+            println!("[*] 网络     : {net}");
+            vanilla::install(&version, &dir, &cli).await?;
             println!("[+] 完成。用 PCL「添加游戏目录」指向该目录即可。");
         }
         Cmd::Run { script, parallel } => {
             let cfg = config::Config::load(&script)?;
-            let proxy = cfg.proxy_filtered();
-            let retries = args.retry.or(cfg.network.retry).unwrap_or(3);
-            let concurrency = args
-                .concurrency
-                .or(cfg.download.concurrency)
-                .unwrap_or(download::DEFAULT_CONCURRENCY);
-            let piece_conns = args
-                .piece_conns
-                .or(cfg.download.piece_conns)
-                .unwrap_or(download::DEFAULT_PIECE_CONNS);
-            let adaptive = args.adaptive.or(cfg.download.adaptive).unwrap_or(false);
+
+            // 优先级：CLI 显式 > 配置文件 > 内置默认
+            let opts = DownloadOpts {
+                proxy: cli
+                    .proxy
+                    .clone()
+                    .or_else(|| cfg.proxy_filtered())
+                    .filter(|p| !p.trim().is_empty()),
+                retries: args.retry.or(cfg.network.retry).unwrap_or(dflt.retries),
+                concurrency: args
+                    .concurrency
+                    .or(cfg.download.concurrency)
+                    .unwrap_or(dflt.concurrency),
+                piece_conns: args
+                    .piece_conns
+                    .or(cfg.download.piece_conns)
+                    .unwrap_or(dflt.piece_conns),
+                adaptive: args.adaptive.or(cfg.download.adaptive).unwrap_or(dflt.adaptive),
+                timeout_secs: args
+                    .timeout
+                    .or(cfg.network.timeout_secs)
+                    .unwrap_or(dflt.timeout_secs),
+            };
 
             let total = cfg.tasks.len();
             println!("[*] 脚本: {} （{} 个任务）", script.display(), total);
 
-            // 并行时把总并发均分，避免 N × concurrency 条连接炸掉
-            let n = cfg.tasks.len();
-            let per_task = if parallel {
-                (concurrency / n).max(1)
-            } else {
-                concurrency
-            };
             if parallel {
+                // 并行时把总并发均分，避免 N × concurrency 条连接炸掉
+                let per = opts.split_for(total);
                 println!(
-                    "[*] 并行模式：{n} 个任务，每任务并发 {}（总并发 {}）",
-                    per_task, concurrency
+                    "[*] 并行模式：{total} 个任务，每任务并发 {}（总并发 {}）",
+                    per.concurrency, opts.concurrency
                 );
-            }
-
-            if parallel {
-                // 任务级并行：总并发已均分，各任务互不争抢
                 let futs: Vec<_> = cfg
                     .tasks
                     .iter()
-                    .map(|task| {
-                        run_one_task(
-                            task,
-                            proxy.as_deref(),
-                            retries,
-                            per_task,
-                            piece_conns,
-                            adaptive,
-                        )
-                    })
+                    .map(|task| run_one_task(task, &per))
                     .collect();
                 futures::future::try_join_all(futs).await?;
             } else {
                 for task in cfg.tasks.iter() {
-                    run_one_task(
-                        task,
-                        proxy.as_deref(),
-                        retries,
-                        concurrency,
-                        piece_conns,
-                        adaptive,
-                    )
-                    .await?;
+                    run_one_task(task, &opts).await?;
                 }
             }
-            println!("\n[+] 脚本执行完成：{} 个任务", total);
+            println!("\n[+] 脚本执行完成：{total} 个任务");
         }
-        Cmd::Fetch { url, dir, size, name, mirrors } => {
-            let client = download::client(proxy)?;
+        Cmd::Fetch {
+            url,
+            dir,
+            size,
+            name,
+            mirrors,
+        } => {
+            let client = download::client(&cli)?;
             let size = match size {
                 Some(s) => s,
                 None => client
@@ -177,48 +178,32 @@ async fn main() -> Result<()> {
             };
             println!("[*] URL  : {url}");
             println!("[*] 大小 : {size} bytes ({:.1} MB)", size as f64 / 1048576.0);
-            println!("[*] 网络 : {}", proxy.unwrap_or("直连"));
+            println!("[*] 网络 : {net}");
             let job = version::Job {
                 url,
                 path: name,
                 sha1: None,
                 size: Some(size),
-                mirrors: mirrors.clone(),
+                mirrors,
             };
-            download::run(&[job], &dir, proxy, retries, concurrency, piece_conns, adaptive).await?;
+            download::run(&[job], &dir, &cli).await?;
             println!("[+] 完成 -> {}", dir.display());
         }
         Cmd::Pack { file, dir } => {
             println!("[*] 输出目录 : {}", dir.display());
-            println!("[*] 网络     : {}", proxy.unwrap_or("直连"));
-            modpack::install(&file, &dir, proxy, retries, concurrency, piece_conns, adaptive).await?;
+            println!("[*] 网络     : {net}");
+            modpack::install(&file, &dir, &cli).await?;
         }
     }
     Ok(())
 }
 
 /// 执行单个任务（抽出来是为了能 join_all 并行）
-async fn run_one_task(
-    task: &config::TaskSpec,
-    proxy: Option<&str>,
-    retries: u32,
-    concurrency: usize,
-    piece_conns: usize,
-    adaptive: bool,
-) -> Result<()> {
+async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()> {
     match task {
         config::TaskSpec::Mc { version, dir } => {
             println!("[mc] {version} -> {dir}");
-            vanilla::install(
-                version,
-                Path::new(dir),
-                proxy,
-                retries,
-                concurrency,
-                piece_conns,
-                adaptive,
-            )
-            .await?;
+            vanilla::install(version, Path::new(dir), opts).await?;
         }
         config::TaskSpec::Generic {
             url,
@@ -228,7 +213,7 @@ async fn run_one_task(
             mirrors,
         } => {
             println!("[generic] {url}");
-            let client = download::client(proxy)?;
+            let client = download::client(opts)?;
             let size = match size {
                 Some(s) => *s,
                 None => client
@@ -250,29 +235,11 @@ async fn run_one_task(
                 size: Some(size),
                 mirrors: mirrors.clone(),
             };
-            download::run(
-                &[job],
-                Path::new(dir),
-                proxy,
-                retries,
-                concurrency,
-                piece_conns,
-                adaptive,
-            )
-            .await?;
+            download::run(&[job], Path::new(dir), opts).await?;
         }
         config::TaskSpec::Pack { file, dir } => {
             println!("[pack] {file} -> {dir}");
-            modpack::install(
-                Path::new(file),
-                Path::new(dir),
-                proxy,
-                retries,
-                concurrency,
-                piece_conns,
-                adaptive,
-            )
-            .await?;
+            modpack::install(Path::new(file), Path::new(dir), opts).await?;
         }
     }
     Ok(())
