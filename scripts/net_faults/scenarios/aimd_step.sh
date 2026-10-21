@@ -57,8 +57,10 @@
 #    机制（implementer-2 给出，我用两组数据验过）：
 #         permits = conns + 净add；workers = 2×conns ⇒ avail = max(0, 净add − conns)
 #         ⇒ avail ≥ 2（cut 的前提）需要 **净 add ≥ conns + 2**
-#         ⚠ 这条引用已失效，保留只为记录历史：旧版 avail 是「本 tick 的 add 之前」读的
-#           （39765be **之前**的 download.rs:431；该行现在是分片重试退避，avail 这个量也已不存在）。
+#         ⚠ 旧版 avail 是「本 tick 的 add 之前」读的，故打印值比累计值晚一 tick。
+#           该机制已随 avail 一起消失（39765be 起 adaptive 改用 budget 闸门）—— 下方 ④ 有说明。
+#           **不写行号**：那个坐标在 39765be 之后指向分片重试退避代码，
+#           留着就是一个"看起来能跳、跳过去是别的东西"的链接。
 #         代 tick 预算：要看到 cut，窗口 tick 数须 ≥ **conns + 3**
 #           （前 conns+2 个 tick 连续 add 把 avail 顶到 2，第 conns+3 个 tick 再遇 delta 下降）
 #           ⇒ 25s（≈12 tick）下 conns ≤ 9；78s（≈38 tick）下 conns ≤ 35。
@@ -235,11 +237,12 @@ check_aimd() {
     #    产物从未 rename 成 t.bin，只有 .part（`.part.state` 40B）。
     #    对未完成文件算 sha 无意义 —— 硬加会得到假 FAIL。
     #    ⭐ 更硬的理由（堵住"那算 .part 的 sha 不就行了"）：`.part` 是**稀疏预分配**的
-    #       （download.rs:325 `f.set_len(size)`），未写区域是空洞、**读出来全是 0**：
+    #       （`f.set_len(size)`；截至 39765be 在 download.rs:325），未写区域是空洞、**读出来全是 0**：
     #       实测 逻辑 1GB / 实占 416MB（臂A）· 尾 1MiB 非零字节 **0/1048576**。
     #       ⇒ 对 .part 算 sha 只反映"下了多少"，与内容正确性无关。
-    #       且**分片路径**的 rename 在 download.rs:590 —— 只有全部 worker 正常收工时才执行；
-    #       单流路径另有一处 rename（download.rs:269，流结束后）。本场景是 1GB/分片路径。
+    #       且**分片路径**的 `rename` 只有全部 worker 正常收工时才执行
+    #       （截至 39765be 在 download.rs:590）；单流路径另有一处 `rename`
+    #       （流结束后，截至 39765be 在 download.rs:269）。本场景是 1GB/分片路径。
     #       被 timeout 杀掉时进程直接终止，任何一处 rename 都不会发生
     #       ⇒ **不是"不方便"，是"没有对象"**。
     #    内容正确性由批次 3/4 的 assert_sha 覆盖；本档只判「段趋势 + tuner/守卫动作」。
