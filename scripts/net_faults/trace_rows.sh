@@ -27,11 +27,19 @@
 #    本表仍产出一行 tick（bytes 为最终值），tput 由 Δ 算 —— 若 Δt 过小会偏大，
 #    但判据只看分段趋势，不受影响。
 #
-# 列（与 T5.1 约定一致）：t_ms, evt, tput_bps, act, delta, last, bytes
+# 列（与 T5.1 约定一致）：t_ms, evt, tput_bps, act, delta, last, avail, bytes
 #   evt ∈ {tick, tune}
 #   tick：tput_bps / bytes 有值；act/delta/last 空
-#   tune：act/delta/last 有值；tput_bps 空；bytes = 最近一次 tick 的累计字节
+#   tune：act/delta/last/avail 有值；tput_bps 空；bytes = 最近一次 tick 的累计字节
 #         （便于把 tune 挂回进度；若要严格"只在 tick 行"，删这一处即可）
+#
+# ⚠ `avail` 列**仅供诊断，不得进断言**：
+#   饱和时它会被阻塞的 worker 立刻抢走，读数不可靠 —— 拿它判"tuner 有没有动"会得出反结论。
+#   它的唯一用途是**区分 `act=hold` 的三种含义**（配 delta/last 一起读）：
+#     hold + delta<last + avail<=1     → 想减但已到底（不是"稳定"）
+#     hold + delta>last + avail>=workers → 想加但已到顶
+#     hold + delta==last                → 真平稳
+#   （workers = min(2×piece_conns, 分片数)，见 download.rs:367）
 #
 # 副作用：本脚本自己设 MC_TUNE_LOG=1 并原样透传退出码。
 # ============================================================================
@@ -60,7 +68,7 @@ __to_bytes() {   # $1=数值 $2=单位
 }
 
 T0="$(__now_ms)"
-printf 't_ms,evt,tput_bps,act,delta,last,bytes\n' >"$OUT_CSV"
+printf 't_ms,evt,tput_bps,act,delta,last,avail,bytes\n' >"$OUT_CSV"
 
 prev_t="" prev_bytes="" last_bytes=""
 
@@ -69,15 +77,16 @@ MC_TUNE_LOG=1 "${cmd[@]}" 2>&1 | while IFS= read -r line; do
 
     case "$line" in
         "[tune]"*)
-            act="" delta="" last=""
+            act="" delta="" last="" avail=""
             for kv in $line; do
                 case "$kv" in
                     act=*)   act="${kv#act=}" ;;
                     delta=*) delta="${kv#delta=}" ;;
                     last=*)  last="${kv#last=}" ;;
+                    avail=*) avail="${kv#avail=}" ;;
                 esac
             done
-            printf '%s,tune,,%s,%s,%s,%s\n' "$t" "$act" "$delta" "$last" "$last_bytes"
+            printf '%s,tune,,%s,%s,%s,%s,%s\n' "$t" "$act" "$delta" "$last" "$avail" "$last_bytes"
             ;;
         \[[[:space:]]*[0-9]*)
             # [ 918.9 KB / 8.0 MB ]  916.4 KB/s  ETA 00:07
@@ -92,7 +101,7 @@ MC_TUNE_LOG=1 "${cmd[@]}" 2>&1 | while IFS= read -r line; do
                             'BEGIN{printf "%d", (a-b)*8*1000/ms}')"
                     fi
                 fi
-                printf '%s,tick,%s,,,,%s\n' "$t" "$tput" "$cur"
+                printf '%s,tick,%s,,,,,%s\n' "$t" "$tput" "$cur"
                 prev_t="$t"
                 prev_bytes="$cur"
                 last_bytes="$cur"
