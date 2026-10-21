@@ -15,6 +15,17 @@ use std::path::PathBuf;
     about = "从 Mojang 官方 CDN 下载 Minecraft，或安装 Modrinth 格式整合包"
 )]
 struct Args {
+    /// 代理地址，例如 http://127.0.0.1:7897
+    ///
+    /// 默认**直连**：Mojang CDN / Fabric meta / Modrinth CDN 在国内均直连可达。
+    /// 只有直连拿不到（超时 / 000）时才加这个参数。
+    #[arg(long, global = true)]
+    proxy: Option<String>,
+
+    /// 单个文件失败后的重试次数（指数退避 1s/2s/4s…）
+    #[arg(long, global = true, default_value_t = 3)]
+    retry: u32,
+
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -41,16 +52,22 @@ enum Cmd {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    match Args::parse().cmd {
+    let args = Args::parse();
+    let proxy = args.proxy.as_deref();
+    let retries = args.retry;
+
+    match args.cmd {
         Cmd::Vanilla { version, dir } => {
             println!("[*] 目标版本 : {version}");
             println!("[*] 输出目录 : {}", dir.display());
-            vanilla::install(&version, &dir).await?;
+            println!("[*] 网络     : {}", proxy.unwrap_or("直连"));
+            vanilla::install(&version, &dir, proxy, retries).await?;
             println!("[+] 完成。用 PCL「添加游戏目录」指向该目录即可。");
         }
         Cmd::Pack { file, dir } => {
             println!("[*] 输出目录 : {}", dir.display());
-            modpack::install(&file, &dir).await?;
+            println!("[*] 网络     : {}", proxy.unwrap_or("直连"));
+            modpack::install(&file, &dir, proxy, retries).await?;
         }
     }
     Ok(())

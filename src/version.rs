@@ -80,8 +80,14 @@ pub struct Job {
 }
 
 /// 返回解析结果 + 原始 JSON 文本（后者要原样落到 versions/<id>/<id>.json）
-pub async fn fetch(url: &str) -> Result<(VersionJson, String)> {
-    let text = reqwest::get(url).await?.text().await?;
+pub async fn fetch(client: &reqwest::Client, url: &str) -> Result<(VersionJson, String)> {
+    let text = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
     let v: VersionJson = serde_json::from_str(&text)?;
     Ok((v, text))
 }
@@ -104,7 +110,7 @@ fn allowed(rules: &[Rule]) -> bool {
     ok
 }
 
-pub async fn collect(v: &VersionJson) -> Result<Vec<Job>> {
+pub async fn collect(client: &reqwest::Client, v: &VersionJson) -> Result<Vec<Job>> {
     let mut jobs = Vec::new();
 
     // ① 客户端 jar
@@ -156,7 +162,13 @@ pub async fn collect(v: &VersionJson) -> Result<Vec<Job>> {
             sha1: None,
         });
 
-        let idx: AssetIndexJson = reqwest::get(&ai.url).await?.json().await?;
+        let idx: AssetIndexJson = client
+            .get(&ai.url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
         for obj in idx.objects.values() {
             let h = &obj.hash;
             if h.len() < 2 {

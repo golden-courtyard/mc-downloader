@@ -19,12 +19,19 @@ struct Lib {
 
 /// 从 Fabric meta 拉 profile，把 json 落盘，并把它的 libraries 下好。
 /// 返回实例 id（fabric-loader-<loader>-<mc>）。
-pub async fn install(mc: &str, loader: &str, root: &Path) -> Result<String> {
-    let url = format!(
-        "https://<你的源>/v2/versions/loader/{mc}/{loader}/profile/json"
-    );
+pub async fn install(
+    mc: &str,
+    loader: &str,
+    root: &Path,
+    proxy: Option<&str>,
+    retries: u32,
+) -> Result<String> {
+    let client = crate::download::client(proxy)?;
+    let url = format!("https://<你的源>/v2/versions/loader/{mc}/{loader}/profile/json");
 
-    let text = reqwest::get(&url)
+    let text = client
+        .get(&url)
+        .send()
         .await
         .with_context(|| format!("请求 Fabric meta 失败: {url}"))?
         .error_for_status()?
@@ -58,7 +65,7 @@ pub async fn install(mc: &str, loader: &str, root: &Path) -> Result<String> {
     }
 
     println!("[*] Fabric 库: {} 个", jobs.len());
-    crate::download::run(&jobs, root).await?;
+    crate::download::run(&jobs, root, proxy, retries).await?;
 
     Ok(prof.id)
 }
