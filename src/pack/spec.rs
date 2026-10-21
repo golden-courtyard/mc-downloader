@@ -21,9 +21,15 @@ pub struct PackEntry {
 pub enum Loader {
     /// 纯原版，不装加载器
     Vanilla,
-    Fabric { loader: String },
-    Forge { version: String },
-    NeoForge { version: String },
+    Fabric {
+        loader: String,
+    },
+    Forge {
+        version: String,
+    },
+    NeoForge {
+        version: String,
+    },
 }
 
 impl Loader {

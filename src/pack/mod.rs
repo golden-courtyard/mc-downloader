@@ -85,7 +85,10 @@ fn parse(zip: &mut zip::ZipArchive<File>) -> Result<PackSpec> {
              目前只认 Modrinth（.mrpack）。"
         );
     }
-    bail!("认不出整合包格式：归档里既没有 {}，也没有 {CF_MANIFEST}", mrpack::INDEX_NAME)
+    bail!(
+        "认不出整合包格式：归档里既没有 {}，也没有 {CF_MANIFEST}",
+        mrpack::INDEX_NAME
+    )
 }
 
 fn print_summary(s: &PackSpec) {
@@ -94,7 +97,10 @@ fn print_summary(s: &PackSpec) {
     println!("[*] 加载器: {}", s.loader.label());
     println!("[*] 文件  : {} 个", s.files.len());
     if s.skipped_unsupported > 0 {
-        println!("[*] 跳过 client=unsupported 的 {} 个", s.skipped_unsupported);
+        println!(
+            "[*] 跳过 client=unsupported 的 {} 个",
+            s.skipped_unsupported
+        );
     }
 }
 
@@ -111,10 +117,7 @@ fn extract_overrides(
         if name.ends_with('/') {
             continue;
         }
-        let Some(rel) = prefixes
-            .iter()
-            .find_map(|p| name.strip_prefix(p.as_str()))
-        else {
+        let Some(rel) = prefixes.iter().find_map(|p| name.strip_prefix(p.as_str())) else {
             continue;
         };
         if rel.is_empty() {
@@ -154,7 +157,13 @@ mod tests {
 
     #[test]
     fn detects_modrinth() {
-        let p = make_zip("mr", &[(mrpack::INDEX_NAME, r#"{"dependencies":{"minecraft":"1.21.1"}}"#)]);
+        let p = make_zip(
+            "mr",
+            &[(
+                mrpack::INDEX_NAME,
+                r#"{"dependencies":{"minecraft":"1.21.1"}}"#,
+            )],
+        );
         let mut z = zip::ZipArchive::new(File::open(&p).unwrap()).unwrap();
         assert!(mrpack::detect(&mut z));
         let spec = parse(&mut z).unwrap();
@@ -185,7 +194,10 @@ mod tests {
         let p = make_zip(
             "ov",
             &[
-                (mrpack::INDEX_NAME, r#"{"dependencies":{"minecraft":"1.21.1"}}"#),
+                (
+                    mrpack::INDEX_NAME,
+                    r#"{"dependencies":{"minecraft":"1.21.1"}}"#,
+                ),
                 ("overrides/config/a.toml", "x=1"),
                 ("client-overrides/options.txt", "fov:90"),
                 ("mods/not-an-override.jar", "ignored"),
@@ -199,8 +211,14 @@ mod tests {
         let n = extract_overrides(&mut z, &spec.override_prefixes, &inst).unwrap();
 
         assert_eq!(n, 2);
-        assert_eq!(std::fs::read_to_string(inst.join("config").join("a.toml")).unwrap(), "x=1");
-        assert_eq!(std::fs::read_to_string(inst.join("options.txt")).unwrap(), "fov:90");
+        assert_eq!(
+            std::fs::read_to_string(inst.join("config").join("a.toml")).unwrap(),
+            "x=1"
+        );
+        assert_eq!(
+            std::fs::read_to_string(inst.join("options.txt")).unwrap(),
+            "fov:90"
+        );
         assert!(!inst.join("mods").exists(), "非覆盖层的条目不该被解出来");
 
         let _ = std::fs::remove_file(&p);

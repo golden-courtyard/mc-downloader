@@ -130,7 +130,10 @@ async fn main() -> Result<()> {
                     .piece_conns
                     .or(cfg.download.piece_conns)
                     .unwrap_or(dflt.piece_conns),
-                adaptive: args.adaptive.or(cfg.download.adaptive).unwrap_or(dflt.adaptive),
+                adaptive: args
+                    .adaptive
+                    .or(cfg.download.adaptive)
+                    .unwrap_or(dflt.adaptive),
                 timeout_secs: args
                     .timeout
                     .or(cfg.network.timeout_secs)
@@ -178,7 +181,10 @@ async fn main() -> Result<()> {
                 }
             };
             println!("[*] URL  : {url}");
-            println!("[*] 大小 : {size} bytes ({:.1} MB)", size as f64 / 1048576.0);
+            println!(
+                "[*] 大小 : {size} bytes ({:.1} MB)",
+                size as f64 / 1048576.0
+            );
             println!("[*] 网络 : {net}");
             let job = version::Job {
                 url,

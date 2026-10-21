@@ -89,7 +89,10 @@ impl Config {
         }
         for (i, t) in self.tasks.iter().enumerate() {
             if let TaskSpec::Generic { size: Some(0), .. } = t {
-                anyhow::bail!("第 {} 个任务是 generic 且 size = 0，会导致不分片；请给真实大小或省略", i + 1);
+                anyhow::bail!(
+                    "第 {} 个任务是 generic 且 size = 0，会导致不分片；请给真实大小或省略",
+                    i + 1
+                );
             }
         }
         Ok(())
@@ -165,7 +168,10 @@ dir = "D:/mc/FO"
 
     #[test]
     fn empty_proxy_means_direct() {
-        let cfg: Config = toml::from_str("[network]\nproxy = \"\"\n[[task]]\nkind=\"mc\"\nversion=\"1\"\ndir=\"d\"\n").unwrap();
+        let cfg: Config = toml::from_str(
+            "[network]\nproxy = \"\"\n[[task]]\nkind=\"mc\"\nversion=\"1\"\ndir=\"d\"\n",
+        )
+        .unwrap();
         assert!(cfg.proxy_filtered().is_none());
     }
 
@@ -212,7 +218,8 @@ size = 0
     #[test]
     fn mc_requires_fields() {
         // 缺 version 应是类型错误
-        let r: std::result::Result<Config, _> = toml::from_str("[[task]]\nkind = \"mc\"\ndir = \"d\"\n");
+        let r: std::result::Result<Config, _> =
+            toml::from_str("[[task]]\nkind = \"mc\"\ndir = \"d\"\n");
         assert!(r.is_err());
     }
 }

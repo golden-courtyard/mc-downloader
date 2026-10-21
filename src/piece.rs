@@ -344,7 +344,10 @@ mod tests {
     #[test]
     fn state_rejects_garbage_and_missing() {
         let part = tmp_part("bad");
-        assert!(PieceState::load(&part, 10 * 1024 * 1024).is_none(), "缺失应为 None");
+        assert!(
+            PieceState::load(&part, 10 * 1024 * 1024).is_none(),
+            "缺失应为 None"
+        );
         std::fs::write(PieceState::path_for(&part), b"not a state file").unwrap();
         assert!(PieceState::load(&part, 10 * 1024 * 1024).is_none());
         std::fs::write(PieceState::path_for(&part), b"MCDLPC01garbage").unwrap();

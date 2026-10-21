@@ -152,7 +152,11 @@ pub async fn collect(client: &reqwest::Client, v: &VersionJson) -> Result<Vec<Jo
 
         // ⭐ native 库（Windows）：旧版本（1.7.x / 1.12.x）必需，缺了启动会报 lwjgl.dll
         if let Some(cls) = &d.classifiers {
-            for key in ["natives-windows", "natives-windows-64", "natives-windows-arm64"] {
+            for key in [
+                "natives-windows",
+                "natives-windows-64",
+                "natives-windows-arm64",
+            ] {
                 if let Some(nat) = cls.get(key) {
                     if let Some(p) = nat.path.clone() {
                         jobs.push(Job {
