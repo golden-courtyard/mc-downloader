@@ -8,6 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # 本机沙箱会拦 target/release 写入、增量编译缓存也常坏，
+  # 所以本地只能验证 debug；release 与 --locked 一致性交给这里。
+  CARGO_INCREMENTAL: 0
 
 jobs:
   check:
@@ -15,23 +18,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 工具链用 stable，最低支持版本由 Cargo.toml 的 rust-version 声明并由 cargo 强制
-      - name: Show toolchain
-        run: cargo -V && rustc -V
-
-      - name: Add components
-        run: rustup component add rustfmt clippy
+      - name: Toolchain
+        run: |
+          rustup update stable --profile minimal
+          rustup component add rustfmt clippy
+          cargo -V && rustc -V
 
       - uses: Swatinem/rust-cache@v2
+
+      # 基线自检：Cargo.toml 的 rust-version 会被 cargo 强制。
+      # 这一步单纯为了在日志里留下「实际编译器版本 >= 声明基线」的证据。
+      - name: Baseline
+        run: |
+          rustc -V
+          grep -E '^(edition|rust-version)' Cargo.toml
 
       - name: Format
         run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Test
-        run: cargo test --all-targets
+        run: cargo test --all-targets --locked
 
       - name: Build (release)
-        run: cargo build --release
+        run: cargo build --release --locked

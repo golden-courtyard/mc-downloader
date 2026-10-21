@@ -100,10 +100,15 @@ impl Config {
 
     /// 代理：空串视为直连
     pub fn proxy_filtered(&self) -> Option<String> {
-        match &self.network.proxy {
-            Some(p) if !p.trim().is_empty() => Some(p.clone()),
-            _ => None,
-        }
+        // 空串 / 全空白 = 显式直连。用 Option 的 filter+cloned 而不是 match：
+        // 「取出、判条件、复制」本来就是这三个组合子的语义。
+        // 这里刻意留 `trim()` 而非 `trim_ascii()`——代理串是用户手输的，
+        // 万一带了全角空格也应当被吃掉，宽容一些。
+        self.network
+            .proxy
+            .as_ref()
+            .filter(|p| !p.trim().is_empty())
+            .cloned()
     }
 }
 

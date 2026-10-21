@@ -342,21 +342,60 @@ piece_conns / adaptive / timeout_secs）。别再往下透传裸参数——
 | 28 | 4 | `words`（位图 u64 个数） |
 | 32 | words×8 | 位图，每 bit 一片 |
 
-### 11.5 工程闸门
+### 11.5 工程闸门与语法基线
 
 CI 三道闸（`.github/workflows/ci.yml`）：
 
 ```bash
 cargo fmt --all --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --all-targets --locked
+cargo build --release --locked
 ```
 
 配套：`.gitattributes` 全仓 `eol=lf`（此前 6 个文件是 CRLF，混排会让 rustfmt
-的 diff 变成整文件重写）；`Cargo.toml` 的 `rust-version = "1.99"` 声明最低版本。
+的 diff 变成整文件重写）。
 
 > ⚠️ **刻意不用 `rust-toolchain.toml` 钉 channel**：那会让 rustup 每次去同步
 > channel 元数据，离线或代理受限时**连 cargo 都跑不起来**（本机实测）。
+
+**语法基线分三层，缺一层就只是「允许」而不是「要求」**：
+
+| 层 | 声明位置 | 作用 |
+|---|---|---|
+| 编译器 | `Cargo.toml` `rust-version = "1.99"` | cargo 在编译器过旧时直接拒绝编译 |
+| 语言版本 | `Cargo.toml` `edition = "2024"` | 允许 2024 语法与语义 |
+| **强制 lint** | `Cargo.toml` `[lints.rust]` / `[lints.clippy]` | **禁止退回旧写法** |
+
+`[lints]` 里的几条不是风格洁癖，各有明确目的：
+
+| lint | 挡住什么 |
+|---|---|
+| `unsafe_code = "forbid"` | 全仓 unsafe。将来真要加（mmap / SIMD），必须先改这行 —— 强制过一次讨论 |
+| `rust_2024_compatibility` (group, `deny`) | if-let 临时值作用域、尾表达式 drop 顺序、RPIT 捕获等十几条迁移 lint。写出在 2021/2024 下**行为不同**的代码会直接编译失败 |
+| `keyword_idents_2024 = "deny"` | `gen` 等新关键字被当标识符 |
+| `unused_must_use = "deny"` | 忽略 `Result` |
+| `clippy::incompatible_msrv = "deny"` | 用了比 `rust-version` 更新的 API —— 让基线自己守住，不靠人记 |
+| `clippy::manual_let_else` | 把 `match` 降级成 `let-else` 的地方 |
+| `clippy::redundant_clone` / `needless_pass_by_value` | 多余复制与所有权浪费 |
+
+> **为什么放 `Cargo.toml` 而不是 `lib.rs` 的 `#![warn]`**：一处声明对
+> lib / bin / test / bench 四个 target 同时生效，不会漏掉某一个。
+>
+> **group 必须带 `priority = -1`**，否则与单条 lint 同优先级会让 cargo 直接报错。
+
+**已实测可用的 1.99 新 API**（写代码前先查证，不凭记忆）：
+
+`Option::is_none_or` · `inspect` · `take_if` · `Result::is_ok_and` ·
+`[T]::split_at_checked` · `slice::as_chunks` · `Vec::pop_if` ·
+`Path::file_prefix` · `std::fs::exists` · `LazyLock` · `io::Error::other` ·
+`array::from_fn` · `String::leak` · `#[expect(lint)]` · let chains（`if` 与 `while` 均可）·
+`#[unsafe(no_mangle)]` · `unsafe extern`
+
+**仍未稳定的**（别写）：`iter::next_chunk` · `slice::array_chunks`
+
+⚠️ **反直觉的一条**：edition 2024 下 `&raw mut STATIC` **不需要** `unsafe` 块，
+写了会被报 `unnecessary unsafe`。这条只有实际编译才发现，很容易凭记忆写错。
 
 ### 11.6 本机环境坑（会复发）
 
