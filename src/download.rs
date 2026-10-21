@@ -4,6 +4,7 @@ use sha1::{Digest, Sha1};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
@@ -360,6 +361,8 @@ async fn one_split(
     sched.push_many(jobs).await;
     sched.close(); // 不会再有新分片
 
+    // 单片大小只在这里取一次（tuner 闭包里不能 await 锁）；仅 adaptive 会用到它
+    let piece_size = table.piece_size();
     let table = Arc::new(tokio::sync::Mutex::new(table));
 
     let conns = opts.piece_conns.min(n_pieces).max(1);
@@ -369,11 +372,17 @@ async fn one_split(
     } else {
         conns
     };
-    // `cond.then(|| v)` 而不是 `if cond { Some(v) } else { None }`：
-    // 后者是在用控制流表达一个 Option 值，前者直接说「条件成立时才有这个值」。
-    let sem = opts
-        .adaptive
-        .then(|| Arc::new(tokio::sync::Semaphore::new(conns)));
+    // adaptive：并发上限放在 budget 里（tuner 可写、worker 只读），不用固定容量的 Semaphore
+    // —— tokio 的 `forget_permits` 只能减「空闲」许可（`batch_semaphore.rs:411` 饱和相减），
+    //    而稳态下 workers(2×conns) > permits(conns) 使 avail 恒为 0，减半分支因此永远减不动。
+    // 非 adaptive：路径保持原样，仍用 Semaphore。
+    let gate = opts.adaptive.then(|| {
+        (
+            Arc::new(AtomicUsize::new(conns)),
+            Arc::new(AtomicUsize::new(0)),
+        )
+    });
+    let sem = (!opts.adaptive).then(|| Arc::new(tokio::sync::Semaphore::new(conns)));
 
     let retries = opts.retries;
     let mut handles = Vec::new();
@@ -384,9 +393,21 @@ async fn one_split(
         let pg = pg.clone();
         let pool = pool.clone();
         let sem = sem.clone();
+        let gate = gate.clone();
         let tbl = table.clone();
         handles.push(tokio::spawn(async move {
             while let Some(pj) = s.next().await {
+                // adaptive：先在闸门里占一个槽（budget 由 tuner 动态调整）；非 adaptive 走 Semaphore
+                if let Some((b, n)) = &gate {
+                    loop {
+                        let cap = b.load(Ordering::Relaxed);
+                        if n.fetch_add(1, Ordering::Relaxed) < cap {
+                            break;
+                        }
+                        n.fetch_sub(1, Ordering::Relaxed);
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                }
                 let _permit = match &sem {
                     Some(sm) => sm.acquire().await.ok(),
                     None => None,
@@ -400,6 +421,10 @@ async fn one_split(
                         }
                         Err(e) => {
                             if attempt >= retries {
+                                // worker 即将退出：把闸门槽还回去，别让计数器悬着
+                                if let Some((_, n)) = &gate {
+                                    n.fetch_sub(1, Ordering::Relaxed);
+                                }
                                 return Err(e.context(format!("分片 {} 重试耗尽", pj.piece_idx)));
                             }
                             tokio::time::sleep(Duration::from_secs(1u64 << attempt)).await;
@@ -407,40 +432,95 @@ async fn one_split(
                         }
                     }
                 }
+                if let Some((_, n)) = &gate {
+                    n.fetch_sub(1, Ordering::Relaxed);
+                }
             }
             Ok::<_, anyhow::Error>(())
         }));
     }
-    // 同上：不是「有/无 semaphore 两种分支」，而是「有 semaphore 才派调参任务」
-    let tuner = sem.as_ref().map(|sm| {
-        let sm = sm.clone();
+    // 同上：不是「有/无闸门两种分支」，而是「有 gate 才派调参任务」
+    let tuner = gate.as_ref().map(|(b, n)| {
+        let b = b.clone();
+        let n = n.clone();
         let pg2 = pg.clone();
         tokio::spawn(async move {
+            // 3 个 tick 内下不来一片 ⇒ AIMD 的调节粒度已大于响应窗口。
+            // 改 TICK 必须同步改这里（`Duration::as_secs_f64` 不是 const fn，故写字面量）。
+            const TICK: Duration = Duration::from_secs(2);
+            const COARSE_SECS: f64 = 3.0 * 2.0;
+            let mut budget = conns;
+            let mut zero_ticks = 0u32;
+            let mut checked = false;
+            let mut last_cut = 0u32;
+            let mut t = 0u32;
             let mut last = pg2.done();
             let mut last_delta = 0u64;
-            let mut tick = tokio::time::interval(Duration::from_secs(2));
+            let mut tick = tokio::time::interval(TICK);
             tick.tick().await;
             loop {
                 tick.tick().await;
+                t += 1;
                 let now = pg2.done();
                 let delta = now.saturating_sub(last);
                 last = now;
+
+                // ① 一次性判定：必须排在任何 add/cut 之前 —— 否则退回时 budget 已不在初始值，
+                //    "退回固定并发"退回的就是个被调过的数。
+                if !checked {
+                    let piece_secs = if delta == 0 {
+                        zero_ticks += 1;
+                        if zero_ticks < 3 {
+                            continue;
+                        }
+                        f64::INFINITY // 连续 3 个 tick 一个字节都没动
+                    } else {
+                        piece_size as f64 * conns as f64 * 2.0 / delta as f64
+                    };
+                    checked = true;
+                    if piece_secs > COARSE_SECS {
+                        let reason = if delta == 0 { "no_data" } else { "coarse_grain" };
+                        if delta == 0 {
+                            eprintln!(
+                                "[adaptive] 连续 3 个 2s tick 无数据（piece={piece_size}B × {conns} 连）：AIMD 无从调节，已退回固定并发 {conns}；请先确认链路可用"
+                            );
+                        } else {
+                            eprintln!(
+                                "[adaptive] 单片预计 {piece_secs:.0}s（piece={piece_size}B × {conns} 连），超过 3 个 2s tick：AIMD 的调节粒度大于响应窗口，已退回固定并发 {conns}；如需自适应请提高带宽或降低 --piece-conns"
+                            );
+                        }
+                        if std::env::var_os("MC_TUNE_LOG").is_some() {
+                            eprintln!("[tune] act=disabled reason={reason}");
+                        }
+                        // 任务就此结束：不再 add/cut，并发停在 conns。
+                        // 收尾处的 `tuner.abort()` 对已结束任务是 no-op（harness.rs:118
+                        // `remote_abort` 的状态迁移失败即返回），这里并没有"取消"逻辑。
+                        return;
+                    }
+                }
                 if delta == 0 {
                     continue;
                 }
-                let avail = sm.available_permits();
+
                 let mut act: &str = "hold";
-                if delta > last_delta && avail < workers {
-                    sm.add_permits(1);
+                let mut take = 0usize;
+                if delta > last_delta && budget < workers {
+                    budget += 1;
                     act = "add";
-                } else if delta < last_delta && avail > 1 {
-                    let take = (avail / 2).max(1);
-                    sm.forget_permits(take);
+                } else if delta < last_delta && budget > 1 && t - last_cut >= 2 {
+                    // 防抖：减半后两个 tick 内不再减，避免抖动下反复砍半把并发饿死在低位
+                    take = (budget / 2).max(1);
+                    budget -= take;
+                    last_cut = t;
                     act = "cut";
                 }
+                b.store(budget, Ordering::Relaxed);
                 // 诊断输出（design §1.3 D6）：只读，不参与任何判断，无环境变量时零行为差异
                 if std::env::var_os("MC_TUNE_LOG").is_some() {
-                    eprintln!("[tune] act={act} avail={avail} delta={delta} last={last_delta}");
+                    eprintln!(
+                        "[tune] act={act} budget={budget} take={take} inflight={} delta={delta} last={last_delta}",
+                        n.load(Ordering::Relaxed)
+                    );
                 }
                 last_delta = delta;
             }
