@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use mc_downloader::download::DownloadOpts;
-use mc_downloader::{config, download, pack, vanilla, version};
+use mc_downloader::{config, download, fabric, pack, vanilla, version};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
