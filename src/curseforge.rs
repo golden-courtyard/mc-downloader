@@ -94,21 +94,29 @@ struct RawFile {
 
 // ── 纯函数（全部可单测，不碰网络/磁盘）─────────────────────────────────────
 
-/// 这个字符串像不像 MC 版本号。
+/// 这个字符串像不像 MC 版本号：形如 `x.y` 或 `x.y.z` 的**纯数字**。
 ///
-/// 判据故意窄：`1.` 开头 + 至少两段纯数字。
-/// *理由*：实测 `IWS 26.3 Fabric-v2.zip` 的 `minecraft.version` 是 `"26.3"`（整合包自己的版本号）。
-/// 窄判据的代价是"未来 MC 2.0 会被判成不像" —— 那时改这一行即可，
-/// 而**误判成"像"会去下一个不存在的版本**，代价更大。
+/// ⚠️ **这个判据只能挡"明显不是版本号"的**（如 `"26.3 Fabric-v2"` 带空格/字母），
+/// 挡不住"包版本号误填进 version 字段"（如 `"26.3"` 形状合法但可能未发布）。
+/// 这是放宽 26.x 之后的真实取舍 —— 用户看到警告时应当知道它只是"**形状可疑**"，
+/// 不是"版本不对"。
+///
+/// *为什么放宽*：MC 已改用年份编号。实测本机
+/// `versions/26.1.2/26.1.2.json` → `type=release`、`releaseTime=2026-04-09`，
+/// 官方 manifest 的 `latest.release` 就是 `"26.1.2"`。
+/// 旧判据要求 `1.` 开头，会把**当前正式版**标成可疑 —— 那是错的。
 pub fn looks_like_mc_version(v: &str) -> bool {
-    if !v.starts_with("1.") {
+    let v = v.trim();
+    if v.is_empty() {
         return false;
     }
-    let mut it = v.split('.');
-    matches!(
-        (it.next(), it.next()),
-        (Some(a), Some(b)) if a.parse::<u32>().is_ok() && b.parse::<u32>().is_ok()
-    )
+    let parts: Vec<&str> = v.split('.').collect();
+    if parts.len() < 2 || parts.len() > 3 {
+        return false;
+    }
+    parts
+        .iter()
+        .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// `forge-47.4.10` → `Forge 47.4.10`；`neoforge-` 必须**先于** `forge-` 匹配。
@@ -786,16 +794,28 @@ mod tests {
         assert!(parse_manifest_str("{not json").is_err());
     }
 
+    /// 年份编号已是现实：26.1.2 是当前正式版（本机 versions/26.1.2 实测）
     #[test]
-    fn iws_version_is_flagged() {
-        // 真实案例：IWS 26.3 Fabric-v2.zip 的 minecraft.version == "26.3"
-        assert!(!looks_like_mc_version("26.3"));
+    fn year_based_versions_are_accepted() {
+        assert!(looks_like_mc_version("26.1.2"));
+        assert!(looks_like_mc_version("26.3"));
         assert!(looks_like_mc_version("1.20.1"));
         assert!(looks_like_mc_version("1.8.9"));
         assert!(looks_like_mc_version("1.21"));
-        assert!(!looks_like_mc_version("1"));
+        // 带空格/字母的仍挡住 —— 这是本判据**唯一**还能做的事
+        assert!(!looks_like_mc_version("26.3 Fabric-v2"));
         assert!(!looks_like_mc_version("1.x"));
+        assert!(!looks_like_mc_version("1"));
+        assert!(!looks_like_mc_version("1.2.3.4"));
         assert!(!looks_like_mc_version(""));
+        assert!(!looks_like_mc_version("  "));
+    }
+
+    /// 取舍必须写死在测试里：放宽之后，"包版本误填"这种再也测不出来
+    #[test]
+    fn pack_version_misplaced_is_no_longer_detectable() {
+        // IWS 那个包写的是 "26.3"（可能是包版本号），但形状与合法 MC 版本无法区分
+        assert!(looks_like_mc_version("26.3"));
     }
 
     fn resolved(url: Option<&str>, name: &str, file: &str) -> CfResolved {
