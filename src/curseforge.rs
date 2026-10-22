@@ -663,6 +663,45 @@ mod tests {
     }
 
     #[test]
+    fn manual_txt_is_actionable() {
+        let dir = std::env::temp_dir().join(format!("mcd-cf-manual-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let items = vec![
+            resolved(None, "Playmate", ""),
+            CfResolved {
+                name: "Gone Mod".into(),
+                slug: "gone".into(),
+                file_name: String::new(),
+                url: None,
+                sha1: None,
+                size: None,
+                project_id: 9,
+                file_id: 99,
+                manual_reason: Some("API 查不到该文件（可能已被作者删除）".into()),
+            },
+        ];
+        let p = write_manual(&dir, &items).unwrap().expect("非空清单应写文件");
+        let text = std::fs::read_to_string(&p).unwrap();
+
+        // 头部条数 + 1 基编号 + 可点的页面链接 + 各自的原因 + 重跑提示
+        assert!(text.contains("以下 2 个 mod"), "{text}");
+        assert!(text.contains("1. Playmate"), "{text}");
+        assert!(text.contains("2. Gone Mod"), "{text}");
+        assert!(text.contains("files/22"), "第一条要带页面链接: {text}");
+        assert!(text.contains("files/99"), "{text}");
+        assert!(text.contains("作者禁止第三方分发"), "{text}");
+        assert!(text.contains("API 查不到"), "两种原因要能区分: {text}");
+        assert!(text.contains("重跑本命令"), "{text}");
+        // 资源包/光影的错放提示（因为 CF manifest 无类别信息）
+        assert!(text.contains("resourcepacks"), "{text}");
+
+        // 空清单：不产文件
+        assert!(write_manual(&dir, &[]).unwrap().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn backoff_is_clamped() {
         assert_eq!(backoff_ms(None), 2_000);
         assert_eq!(backoff_ms(Some(1)), 1_000);
