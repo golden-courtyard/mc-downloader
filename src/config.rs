@@ -44,9 +44,15 @@ pub struct Download {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum TaskSpec {
-    /// 下载原版
+    /// 下载原版；可选装加载器（`loader = "fabric"` 或 `"fabric:0.20.0"`）
     #[serde(rename = "mc")]
-    Mc { version: String, dir: String },
+    Mc {
+        version: String,
+        dir: String,
+        /// `fabric` / `fabric:<版本>`；缺省 = 只装原版
+        #[serde(default)]
+        loader: Option<String>,
+    },
     /// 下载单个 URL
     #[serde(rename = "generic")]
     Generic {

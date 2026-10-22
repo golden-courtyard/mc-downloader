@@ -208,9 +208,30 @@ async fn main() -> Result<()> {
 /// 执行单个任务（抽出来是为了能 join_all 并行）
 async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()> {
     match task {
-        config::TaskSpec::Mc { version, dir } => {
+        config::TaskSpec::Mc { version, dir, loader } => {
             println!("[mc] {version} -> {dir}");
-            vanilla::install(version, Path::new(dir), opts).await?;
+            let root = Path::new(dir);
+            vanilla::install(version, root, opts).await?;
+
+            // 加载器：复用 fabric.rs，不在这里重写安装逻辑
+            if let Some(spec) = loader.as_deref() {
+                let (kind, want_ver) = match spec.split_once(':') {
+                    Some((k, v)) => (k.trim(), Some(v.trim().to_string())),
+                    None => (spec.trim(), None),
+                };
+                if kind != "fabric" {
+                    anyhow::bail!(
+                        "未知的 loader: \"{kind}\"（目前只支持 fabric；Forge/NeoForge 需跑 installer，尚未实现）"
+                    );
+                }
+                let lv = match want_ver {
+                    Some(v) if !v.is_empty() => v,
+                    _ => fabric::latest_stable_loader(version, opts).await?,
+                };
+                let id = fabric::install(version, &lv, root, opts).await?;
+                println!("[+] 加载器装好 -> versions/{id}/");
+                println!("[i] 用启动器选 {id} 即可（本工具只保证目录结构，未验证能否启动）");
+            }
         }
         config::TaskSpec::Generic {
             url,
