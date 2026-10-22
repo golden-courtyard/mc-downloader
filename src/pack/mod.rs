@@ -132,7 +132,7 @@ async fn install_curseforge(
     }
     println!(
         "[*] 加载器: {} —— 需自行安装（本次不装，见 DESIGN §14.7）",
-        m.loader_raw
+        m.loader_label
     );
     println!("[*] 文件  : {} 个", m.refs.len());
 
