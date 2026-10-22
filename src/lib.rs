@@ -7,6 +7,7 @@ pub mod config;
 pub mod curseforge;
 pub mod download;
 pub mod fabric;
+pub mod forge;
 pub mod manifest;
 pub mod pack;
 pub mod piece;
