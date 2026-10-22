@@ -130,6 +130,101 @@ pub fn loader_label(raw: &str) -> String {
     raw.to_string()
 }
 
+/// 把 URL 拆成 `(origin, path)`；`origin` 形如 `https://host[:port]`
+fn split_origin(u: &str) -> Result<(String, &str)> {
+    let (scheme, rest) = u
+        .split_once("://")
+        .ok_or_else(|| anyhow::anyhow!("URL 缺 scheme: {u}"))?;
+    Ok(match rest.find('/') {
+        Some(i) => (format!("{scheme}://{}", &rest[..i]), &rest[i..]),
+        None => (format!("{scheme}://{rest}"), "/"),
+    })
+}
+
+/// 按 RFC 3986 的常见情形把 `Location` 解析成绝对 URL（**纯函数**）。
+///
+/// 实测 forgecdn 给的是绝对地址，但**不能假设**：相对/协议相对/绝对路径都兜住。
+/// 不引入 `url` crate 是为了零新增依赖（reqwest 的传递依赖不保证可用）。
+pub fn resolve_location(base: &str, loc: &str) -> Result<String> {
+    let loc = loc.trim();
+    if loc.is_empty() {
+        bail!("Location 为空");
+    }
+    // ① 已是绝对地址
+    if loc.starts_with("http://") || loc.starts_with("https://") {
+        return Ok(loc.to_string());
+    }
+    let scheme = base.split_once("://").map(|(s, _)| s).unwrap_or("https");
+    let (origin, base_path) = split_origin(base)?;
+    // ② 协议相对 `//host/path`
+    if let Some(rest) = loc.strip_prefix("//") {
+        return Ok(format!("{scheme}://{rest}"));
+    }
+    // ③ 绝对路径 `/path`
+    if loc.starts_with('/') {
+        return Ok(format!("{origin}{loc}"));
+    }
+    // ④ 相对路径：接到 base 的目录后面
+    let dir = match base_path.rfind('/') {
+        Some(i) => &base_path[..=i],
+        None => "/",
+    };
+    Ok(format!("{origin}{dir}{loc}"))
+}
+
+/// 真实地址的解析结果
+pub enum RealUrl {
+    Ok { url: String, size: Option<u64> },
+    /// 链路已死（404）—— 不是致命错误，该条进人工清单
+    Dead(String),
+}
+
+/// CF 的 `downloadUrl` 指向 `edge.forgecdn.net`，而**该域对带 Range 的请求直接 404**
+/// （且不返回 302）；真文件在 302 目标 `mediafilez.forgecdn.net` 上，那个域支持 Range（实测 206）。
+/// ⇒ 在这里先 HEAD 一次（**禁止跟随重定向**）拿 `Location`，后续分片直接用真地址。
+///
+/// `client` 必须是**不跟随重定向**的那个（调用方建一次复用，别每个 URL 建一个）。
+pub async fn resolve_real_url(client: &reqwest::Client, url: &str) -> Result<RealUrl> {
+    let r = client.head(url).send().await.with_context(|| {
+        format!("HEAD {url} 失败（拿不到真实地址，分片可能 404）")
+    })?;
+    let status = r.status().as_u16();
+    let clen = r
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok());
+
+    match status {
+        301 | 302 | 303 | 307 | 308 => {
+            let loc = r
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| anyhow::anyhow!("{url} 返回 {status} 但没有 Location 头"))?;
+            let abs = resolve_location(url, loc)
+                .with_context(|| format!("解析 Location 失败: {loc}"))?;
+            Ok(RealUrl::Ok { url: abs, size: clen })
+        }
+        200 => Ok(RealUrl::Ok {
+            url: url.to_string(),
+            size: clen,
+        }),
+        404 => Ok(RealUrl::Dead(format!(
+            "文件地址 404（作者可能已删除/替换该文件）: {url}"
+        ))),
+        other => {
+            // HEAD 本身不被支持（或临时故障）：**不 bail**，回退原地址。
+            // 后果：< 8MB 的单流可能成；≥ 8MB 的分片会 404 —— 但比整个包失败好。
+            eprintln!("[!] HEAD {url} 返回 {other}，回退原地址（大文件的分片可能失败）");
+            Ok(RealUrl::Ok {
+                url: url.to_string(),
+                size: None,
+            })
+        }
+    }
+}
+
 /// 从 manifest 文本解析（**纯函数**，便于用字符串做单测）。
 pub fn parse_manifest_str(text: &str) -> Result<CfManifest> {
     let raw: RawManifest =
@@ -491,6 +586,11 @@ pub async fn resolve_all(
     }
 
     // ② 逐条拿文件信息
+    //    `noredir` 只用于解 302（见 resolve_real_url 的注释），建一次复用
+    let noredir = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .context("建 no-redirect 客户端失败")?;
     let mut out = Vec::with_capacity(refs.len());
     for r in refs {
         let k = (r.project_id, r.file_id);
@@ -539,19 +639,46 @@ pub async fn resolve_all(
                 let f: FileResp = serde_json::from_value(v)
                     .with_context(|| format!("{what} 的响应结构不认识"))?;
                 let f = f.data;
-                let url = f.download_url.clone();
-                CfResolved {
-                    name,
-                    slug,
-                    file_name: f.file_name.clone(),
-                    url: url.clone(),
-                    sha1: f.sha1(),
-                    size: f.file_length,
-                    project_id: r.project_id,
-                    file_id: r.file_id,
-                    manual_reason: url
-                        .is_none()
-                        .then(|| "作者禁止第三方分发（API 未给直链）".to_string()),
+                let sha1 = f.sha1();
+                let api_size = f.file_length;
+                // 拿到 downloadUrl 后**先解 302**：edge 域对 Range 404，真文件在 302 目标上
+                match f.download_url.clone() {
+                    None => CfResolved {
+                        name,
+                        slug,
+                        file_name: f.file_name.clone(),
+                        url: None,
+                        sha1,
+                        size: api_size,
+                        project_id: r.project_id,
+                        file_id: r.file_id,
+                        manual_reason: Some("作者禁止第三方分发（API 未给直链）".to_string()),
+                    },
+                    Some(raw) => match resolve_real_url(&noredir, &raw).await? {
+                        RealUrl::Dead(why) => CfResolved {
+                            name,
+                            slug,
+                            file_name: f.file_name.clone(),
+                            url: None,
+                            sha1,
+                            size: api_size,
+                            project_id: r.project_id,
+                            file_id: r.file_id,
+                            manual_reason: Some(why),
+                        },
+                        RealUrl::Ok { url, size } => CfResolved {
+                            name,
+                            slug,
+                            file_name: f.file_name.clone(),
+                            url: Some(url),
+                            sha1,
+                            // HEAD 给的 content-length 比 API 的 fileLength 更贴近实际
+                            size: size.or(api_size),
+                            project_id: r.project_id,
+                            file_id: r.file_id,
+                            manual_reason: None,
+                        },
+                    },
                 }
             }
         };
@@ -769,6 +896,52 @@ mod tests {
         // 空清单：不产文件
         assert!(write_manual(&dir, &[]).unwrap().is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn location_absolute_passthrough() {
+        // 实测 forgecdn 给的就是绝对地址（最常见路径）
+        assert_eq!(
+            resolve_location(
+                "https://edge.forgecdn.net/files/6752/633/x.jar",
+                "https://mediafilez.forgecdn.net/files/6752/633/x.jar"
+            )
+            .unwrap(),
+            "https://mediafilez.forgecdn.net/files/6752/633/x.jar"
+        );
+    }
+
+    #[test]
+    fn location_other_shapes_are_covered() {
+        let base = "https://edge.forgecdn.net/files/6752/633/x.jar";
+        // 协议相对
+        assert_eq!(
+            resolve_location(base, "//mediafilez.forgecdn.net/a/b.jar").unwrap(),
+            "https://mediafilez.forgecdn.net/a/b.jar"
+        );
+        // 绝对路径
+        assert_eq!(
+            resolve_location(base, "/files/1/2/y.jar").unwrap(),
+            "https://edge.forgecdn.net/files/1/2/y.jar"
+        );
+        // 相对路径：接到 base 的**目录**后面（不是替换文件名所在段）
+        assert_eq!(
+            resolve_location(base, "z.jar").unwrap(),
+            "https://edge.forgecdn.net/files/6752/633/z.jar"
+        );
+        // base 没有路径时，目录默认 "/"
+        assert_eq!(
+            resolve_location("https://host", "z.jar").unwrap(),
+            "https://host/z.jar"
+        );
+    }
+
+    #[test]
+    fn location_empty_is_an_error() {
+        let e = resolve_location("https://edge/x.jar", "   ").unwrap_err().to_string();
+        assert!(e.contains("Location 为空"), "{e}");
+        // base 缺 scheme 也要报错，别静默拼出个怪 URL
+        assert!(resolve_location("edge/x.jar", "y.jar").is_err());
     }
 
     #[test]
