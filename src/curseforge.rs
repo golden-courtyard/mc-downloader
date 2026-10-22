@@ -448,6 +448,11 @@ struct CfFile {
     download_url: Option<String>,
     #[serde(default, rename = "fileLength")]
     file_length: Option<u64>,
+    /// CurseForge 的文件状态：1=Approved, 2=ApprovedWithRestrictions,
+    /// 3=Rejected, 4=Processing, 5=ChangesRequired, 6=Deleted, 7=Archived
+    /// 缺省为 None（老响应可能没有这个字段）
+    #[serde(default, rename = "fileStatus")]
+    file_status: Option<u32>,
     #[serde(default)]
     hashes: Vec<CfHash>,
 }
@@ -652,7 +657,20 @@ pub async fn resolve_all(
                         size: api_size,
                         project_id: r.project_id,
                         file_id: r.file_id,
-                        manual_reason: Some("作者禁止第三方分发（API 未给直链）".to_string()),
+                        // ⚠️ downloadUrl 为空有**两种完全不同的原因**，混成一句会误导用户：
+                        //   · fileStatus=4（Processing）：文件还在上传/审核，**等一下重跑就行**
+                        //   · 禁分发：**永远下不了**，只能手动
+                        // 实测 IWS 那个包里有 2 个 fileStatus=4 的，原来被报成"作者禁止分发"。
+                        manual_reason: Some(match f.file_status {
+                            Some(4) => "文件正在处理中（Processing）—— 稍后重跑即可".to_string(),
+                            Some(2) => "作者限制分发（ApprovedWithRestrictions）".to_string(),
+                            Some(3) => "文件被拒绝（Rejected）".to_string(),
+                            Some(5) => "需要修改后才能发布（ChangesRequired）".to_string(),
+                            Some(6) => "文件已被作者删除（Deleted）".to_string(),
+                            Some(7) => "文件已归档（Archived）".to_string(),
+                            Some(s) => format!("API 未给直链（fileStatus={s}）"),
+                            None => "作者禁止第三方分发（API 未给直链）".to_string(),
+                        }),
                     },
                     Some(raw) => match resolve_real_url(&noredir, &raw).await? {
                         RealUrl::Dead(why) => CfResolved {
