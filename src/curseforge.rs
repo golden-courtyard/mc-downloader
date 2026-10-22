@@ -51,6 +51,9 @@ pub struct CfManifest {
     pub mc: String,
     /// 原样保留，形如 `forge-47.4.10` / `neoforge-21.1.251` / `fabric-0.20.0`
     pub loader_raw: String,
+    /// 给人看的：`Forge 47.4.10` / `NeoForge 21.1.251` / `Fabric 0.20.0`；
+    /// 未知前缀原样返回；manifest 没写 → `无`
+    pub loader_label: String,
     pub refs: Vec<CfRef>,
 }
 
@@ -108,6 +111,25 @@ pub fn looks_like_mc_version(v: &str) -> bool {
     )
 }
 
+/// `forge-47.4.10` → `Forge 47.4.10`；`neoforge-` 必须**先于** `forge-` 匹配。
+/// 不认识的 id **原样返回**（别 bail —— 新加载器出现时不该让整个包装不了）。
+pub fn loader_label(raw: &str) -> String {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return "无".to_string();
+    }
+    for (prefix, name) in [
+        ("neoforge-", "NeoForge "),
+        ("forge-", "Forge "),
+        ("fabric-", "Fabric "),
+    ] {
+        if let Some(rest) = raw.strip_prefix(prefix) {
+            return format!("{name}{rest}");
+        }
+    }
+    raw.to_string()
+}
+
 /// 从 manifest 文本解析（**纯函数**，便于用字符串做单测）。
 pub fn parse_manifest_str(text: &str) -> Result<CfManifest> {
     let raw: RawManifest =
@@ -121,11 +143,10 @@ pub fn parse_manifest_str(text: &str) -> Result<CfManifest> {
         .find(|l| l.primary)
         .or_else(|| raw.minecraft.mod_loaders.first())
         .map(|l| l.id.clone())
-        .unwrap_or_else(|| "(manifest 未指定)".to_string());
+        .unwrap_or_default(); // 空 ⇒ loader_label 会映射成「无」
 
-    if raw.files.is_empty() {
-        bail!("{CF_MANIFEST} 里没有任何 files 条目");
-    }
+    // 空 files 不报错：那是"这个包没有要下的 mod"，不是解析失败
+    // （主理人 2026-10-22 裁决：refs 空即可，交给上层打印"可自动 0 个"）
 
     let refs = raw
         .files
@@ -137,10 +158,12 @@ pub fn parse_manifest_str(text: &str) -> Result<CfManifest> {
         })
         .collect();
 
+    let label = loader_label(&loader_raw);
     Ok(CfManifest {
         name: raw.name.unwrap_or_else(|| "(未命名)".to_string()),
         mc: raw.minecraft.version,
         loader_raw,
+        loader_label: label,
         refs,
     })
 }
@@ -528,6 +551,7 @@ mod tests {
         let m = parse_manifest_str(&text).unwrap();
         assert_eq!(m.mc, "1.20.1");
         assert_eq!(m.loader_raw, "forge-47.4.10");
+        assert_eq!(m.loader_label, "Forge 47.4.10");
         assert_eq!(m.name, "(未命名)");
         assert_eq!(m.refs.len(), 2);
         assert_eq!(
@@ -547,23 +571,38 @@ mod tests {
             r#"[{"id":"fabric-0.20.0"},{"id":"neoforge-21.1.251","primary":true}]"#,
             r#"[{"projectID":1,"fileID":2}]"#,
         );
-        assert_eq!(parse_manifest_str(&text).unwrap().loader_raw, "neoforge-21.1.251");
+        let m = parse_manifest_str(&text).unwrap();
+        assert_eq!(m.loader_raw, "neoforge-21.1.251");
+        assert_eq!(m.loader_label, "NeoForge 21.1.251");
     }
 
     #[test]
     fn loader_absent_is_not_a_panic() {
         let text = manifest("1.20.1", "[]", r#"[{"projectID":1,"fileID":2}]"#);
-        assert_eq!(
-            parse_manifest_str(&text).unwrap().loader_raw,
-            "(manifest 未指定)"
-        );
+        let m = parse_manifest_str(&text).unwrap();
+        assert_eq!(m.loader_raw, "", "manifest 没写就留空，别编一个占位串");
+        assert_eq!(m.loader_label, "无");
+    }
+
+    /// 空 files **不是错误**（主理人裁决）：那是"这个包没有要下的 mod"
+    #[test]
+    fn empty_files_is_ok() {
+        let text = manifest("1.20.1", "[]", "[]");
+        let m = parse_manifest_str(&text).unwrap();
+        assert!(m.refs.is_empty());
+        assert_eq!(m.loader_label, "无");
     }
 
     #[test]
-    fn empty_files_is_an_error() {
-        let text = manifest("1.20.1", "[]", "[]");
-        let err = parse_manifest_str(&text).unwrap_err().to_string();
-        assert!(err.contains("没有任何 files"), "{err}");
+    fn loader_labels_are_normalized() {
+        assert_eq!(loader_label("forge-47.4.10"), "Forge 47.4.10");
+        assert_eq!(loader_label("neoforge-21.1.251"), "NeoForge 21.1.251");
+        assert_eq!(loader_label("fabric-0.20.0"), "Fabric 0.20.0");
+        assert_eq!(loader_label(""), "无");
+        // 未知前缀：**原样返回**，别 bail（新加载器出现时不该整包装不了）
+        assert_eq!(loader_label("custom-1.2.3"), "custom-1.2.3");
+        // neoforge 不能被 forge 抢走（前缀顺序陷阱）
+        assert!(loader_label("neoforge-1").starts_with("NeoForge"));
     }
 
     #[test]
