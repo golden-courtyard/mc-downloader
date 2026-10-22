@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use mc_downloader::download::DownloadOpts;
-use mc_downloader::{config, download, fabric, pack, vanilla, version};
+use mc_downloader::{config, download, fabric, forge, pack, vanilla, version};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -219,16 +219,26 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
                     Some((k, v)) => (k.trim(), Some(v.trim().to_string())),
                     None => (spec.trim(), None),
                 };
-                if kind != "fabric" {
-                    anyhow::bail!(
-                        "未知的 loader: \"{kind}\"（目前只支持 fabric；Forge/NeoForge 需跑 installer，尚未实现）"
-                    );
-                }
-                let lv = match want_ver {
-                    Some(v) if !v.is_empty() => v,
-                    _ => fabric::latest_stable_loader(version, opts).await?,
+                let id = match kind {
+                    "fabric" => {
+                        let lv = match want_ver {
+                            Some(v) if !v.is_empty() => v,
+                            _ => fabric::latest_stable_loader(version, opts).await?,
+                        };
+                        fabric::install(version, &lv, root, opts).await?
+                    }
+                    // Forge：下载归我们（install_profile 的 libraries），构建归官方 installer（--offline）
+                    "forge" => {
+                        let fv = match want_ver {
+                            Some(v) if !v.is_empty() => v,
+                            _ => forge::latest_forge(version, opts).await?,
+                        };
+                        forge::install(version, &fv, root, opts).await?
+                    }
+                    other => anyhow::bail!(
+                        "未知的 loader: \"{other}\"（支持：fabric / forge；NeoForge 尚未实现）"
+                    ),
                 };
-                let id = fabric::install(version, &lv, root, opts).await?;
                 println!("[+] 加载器装好 -> versions/{id}/");
                 println!("[i] 用启动器选 {id} 即可（本工具只保证目录结构，未验证能否启动）");
             }
