@@ -725,7 +725,29 @@ manifest.json
 
 ⇒ **90% 可自动化**，够用。禁分发率高的包（如 35.7% 那个）手动补几分钟。
 
-### 14.7 明确不做
+### 14.7 实现约束（2026-10-22 补，三条都是审方案时发现的）
+
+**① CF 分支必须绕开 `check_supported()`**
+
+`pack/mod.rs:47` 在**任何下载之前**调 `spec.loader.check_supported()`，而 `spec.rs:39` 对 Forge/NeoForge **直接 bail**。
+CF manifest 的 `modLoaders[].id` 恰恰是 `forge-47.4.10` / `neoforge-...`
+
+⇒ **不绕开的话，CF 包会在第一步就死，一个 mod 都下不到。**
+⇒ CF 路径**只做** `mods/` + `overrides/` + `manual.txt`，并打印「加载器 X —— 需自行安装」。
+
+**② `minecraft.version` 不可信**
+
+实测 `IWS 26.3 Fabric-v2.zip` 的 `minecraft.version` 是 **`"26.3"`** —— 那不是 MC 版本号（当前全是 1.x）。
+
+⇒ 这反过来**证明了"CF 路径不装 vanilla"是对的**：真按它去 `vanilla::install`，这个包会直接失败（没有叫 26.3 的版本）。
+⇒ 处理：**原样记录 + 做一次格式判断**，不像 MC 版本时标注「可能不可靠」，**绝不拿它去装 vanilla**。
+
+**③ `files[].required` 实测全是 `true`**
+
+三个真实包 188 条记录，`required` **无一为 `false`**。
+⇒ 字段照实记录，**但不用它做任何过滤**（当前数据里它不携带信息）。
+
+### 14.8 明确不做
 
 | 不做 | 归属 |
 |---|---|

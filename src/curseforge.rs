@@ -184,10 +184,37 @@ pub fn api_key_from_env() -> Result<String> {
         Ok(k) if !k.trim().is_empty() => Ok(k.trim().to_string()),
         _ => bail!(
             "错误：CurseForge 整合包需要 {ENV_KEY} 环境变量\n\
-             \x20     获取：https://console.curseforge.com/\n\
-             \x20     设置：setx {ENV_KEY} \"<key>\"   然后重开终端"
+             \n\
+             申请（免费，几分钟）：\n\
+             \x20 1. 登录 https://console.curseforge.com/ （没有账号先注册）\n\
+             \x20 2. 创建 API Key，用途填「个人使用 / 下载整合包」\n\
+             \x20 3. 复制以 $2a$10$ 开头的字符串\n\
+             \n\
+             设置：\n\
+             \x20 Windows:     setx {ENV_KEY} \"<key>\"     然后重开终端\n\
+             \x20 Linux/macOS: export {ENV_KEY}='<key>'\n\
+             \n\
+             验证（返回 200 就是成功；403 说明 key 无效）：\n\
+             \x20 curl -s -o /dev/null -w \"%{{http_code}}\\n\" \\\n\
+             \x20   -H \"x-api-key: ${{{ENV_KEY}}}\" \\\n\
+             \x20   https://api.curseforge.com/v1/mods/1066065\n\
+             \n\
+             不配 key 也能用：Modrinth 整合包（.mrpack）不需要 key"
         ),
     }
+}
+
+/// 极简 URL 编码（只用于搜索词：空格 → `+`，其余非 unreserved 字符转 %XX）
+fn urlencode(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => o.push(b as char),
+            b' ' => o.push('+'),
+            _ => o.push_str(&format!("%{b:02X}")),
+        }
+    }
+    o
 }
 
 /// 禁分发条目的人工下载页
@@ -249,15 +276,19 @@ pub fn write_manual(dir: &Path, items: &[CfResolved]) -> Result<Option<std::path
     for (i, m) in items.iter().enumerate() {
         let why = m.manual_reason.as_deref().unwrap_or("无法获取直链");
         s.push_str(&format!(
-            "  {}. {:<24} {}   [{}]\n",
+            "  {}. {}\n     CurseForge: {}   [{}]\n     可试 Modrinth: https://modrinth.com/mods?q={}\n",
             i + 1,
             m.name,
             page_url(&m.slug, m.file_id),
-            why
+            why,
+            urlencode(&m.name)
         ));
     }
     s.push_str("\n放到位后重跑本命令即可（已下载的会跳过）。\n");
     s.push_str("（若某文件本属资源包/光影，请自行移到 resourcepacks/ 或 shaderpacks/。）\n");
+    s.push_str(
+        "⚠️ Modrinth 上未必有同一个 mod；同名也可能是不同项目 —— 请核对作者与 MC 版本再下载。\n",
+    );
 
     let path = dir.join("manual.txt");
     std::fs::write(&path, s).with_context(|| format!("写 {} 失败", path.display()))?;
