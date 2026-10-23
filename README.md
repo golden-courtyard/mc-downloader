@@ -69,8 +69,8 @@
 |---|---|
 | 1.20.1 + **Forge 47.4.10** → 目录结构 | ✅ 与官方 installer 产物逐项一致（`mainClass` / patched client / libraries 数）|
 | **1.20.1 + Forge 47.4.10 → 实际启动** | ✅ **用户用 PCL 实测，可进入游戏** |
+| **1.20.1 + Fabric 0.19.5 → 实际启动** | ✅ **用户用 PCL 实测，可进入游戏** |
 | CurseForge 整合包 188 个 mod 对账 | ✅ 三个包全都对得上（`mods/` + `manual.txt` = manifest 条数）|
-| Fabric 装载 | ⚠️ **结构已验证**（7 项与 PCL 实例一致），**未实测启动** |
 | NeoForge | ❌ 未实现 |
 
 > ⚠️ 这张表**区分「结构对」和「真的能跑」**。只有标「实测」的那条是人工确认过的；
@@ -125,7 +125,7 @@ mc-downloader pack "xxx.mrpack" -d "D:/Games/.minecraft"
 | **Modrinth 整合包**（`modrinth.index.json`）| ✅ |
 | **CurseForge 整合包**（`manifest.json`）| ✅ 需 `CURSEFORGE_API_KEY`；禁分发的模组生成 `manual.txt` |
 | 结构相同的 `.zip`（只改了扩展名）| ✅ |
-| **Fabric** 加载器 | ✅ |
+| **Fabric** 加载器 | ✅ **1.20.1 已实测可启动** |
 | **Forge** 加载器（`loader = "forge"` / `"forge:47.4.10"`）| ✅ 需 Java；下载由本工具做，processor 交给官方 installer。**1.20.1 已实测可启动** |
 | **NeoForge** 加载器 | ❌ 未做（结构类似 Forge，可照搬）|
 | **HMCL / MCBBS / MMC** | ❌ 不认 |
