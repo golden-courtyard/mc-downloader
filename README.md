@@ -52,14 +52,29 @@
 
 ## 是什么
 
-一个**单文件命令行工具**，解决两件事：
+一个**单文件命令行工具**，解决四件事：
 
 | 场景 | 命令 |
 |---|---|
-| 我只想要某个 MC 版本的完整文件 | `vanilla` |
-| 我有一个 Modrinth 整合包，想铺成能启动的实例 | `pack` |
+| 我要某个 MC 版本的完整文件 | `vanilla` |
+| 我要原版 + 加载器（Fabric / Forge），一步装好 | `run`（配置里写 `loader`）|
+| 我有整合包（Modrinth / CurseForge），想铺成能启动的实例 | `pack` |
+| 我要下单个文件（任意 URL，可分片 / 续传） | `fetch` |
 
 **不做启动器**——启动、模组管理、存档、账号，交给 PCL 这类启动器。
+
+### 验证状态（2026-10-23）
+
+| 项 | 状态 |
+|---|---|
+| 1.20.1 + **Forge 47.4.10** → 目录结构 | ✅ 与官方 installer 产物逐项一致（`mainClass` / patched client / libraries 数）|
+| **1.20.1 + Forge 47.4.10 → 实际启动** | ✅ **用户用 PCL 实测，可进入游戏** |
+| CurseForge 整合包 188 个 mod 对账 | ✅ 三个包全都对得上（`mods/` + `manual.txt` = manifest 条数）|
+| Fabric 装载 | ⚠️ **结构已验证**（7 项与 PCL 实例一致），**未实测启动** |
+| NeoForge | ❌ 未实现 |
+
+> ⚠️ 这张表**区分「结构对」和「真的能跑」**。只有标「实测」的那条是人工确认过的；
+> 其余是文件级比对 —— **结构一致不等于能启动**。
 
 ---
 
@@ -111,7 +126,7 @@ mc-downloader pack "xxx.mrpack" -d "D:/Games/.minecraft"
 | **CurseForge 整合包**（`manifest.json`）| ✅ 需 `CURSEFORGE_API_KEY`；禁分发的模组生成 `manual.txt` |
 | 结构相同的 `.zip`（只改了扩展名）| ✅ |
 | **Fabric** 加载器 | ✅ |
-| **Forge** 加载器（`loader = "forge"` / `"forge:47.4.10"`）| ✅ 需 Java；下载由本工具做，processor 交给官方 installer |
+| **Forge** 加载器（`loader = "forge"` / `"forge:47.4.10"`）| ✅ 需 Java；下载由本工具做，processor 交给官方 installer。**1.20.1 已实测可启动** |
 | **NeoForge** 加载器 | ❌ 未做（结构类似 Forge，可照搬）|
 | **HMCL / MCBBS / MMC** | ❌ 不认 |
 
