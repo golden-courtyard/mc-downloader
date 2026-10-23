@@ -1,7 +1,7 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use mc_downloader::download::DownloadOpts;
-use mc_downloader::{config, download, fabric, forge, pack, vanilla, version};
+use mc_downloader::{config, download, fabric, forge, pack, url_list, vanilla, version};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -100,6 +100,7 @@ async fn main() -> Result<()> {
         piece_conns: args.piece_conns.unwrap_or(dflt.piece_conns),
         adaptive: args.adaptive.unwrap_or(dflt.adaptive),
         timeout_secs: args.timeout.unwrap_or(dflt.timeout_secs),
+                continue_on_error: false,
     };
     let net = cli.proxy.as_deref().unwrap_or("直连");
 
@@ -138,6 +139,9 @@ async fn main() -> Result<()> {
                     .timeout
                     .or(cfg.network.timeout_secs)
                     .unwrap_or(dflt.timeout_secs),
+                // 配置文件不暴露这个开关：它是 main.rs 按任务类型决定的
+                // （urls_file 批量任务在下面单点覆盖成 true）
+                continue_on_error: false,
             };
 
             let total = cfg.tasks.len();
@@ -245,33 +249,69 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
         }
         config::TaskSpec::Generic {
             url,
+            urls_file,
             dir,
             name,
             size,
             mirrors,
         } => {
-            println!("[generic] {url}");
-            let client = download::client(opts)?;
-            let size = match size {
-                Some(s) => *s,
-                None => {
-                    let resp = client.head(url).send().await?;
-                    download::header_content_length(&resp).ok_or_else(|| {
-                        anyhow::anyhow!("服务器未返回 Content-Length，请在脚本里显式给 size")
-                    })?
+            let root = Path::new(dir);
+            // 配置层已校验过「url / urls_file 二选一」，这里按存在哪个走
+            if let Some(list_path) = urls_file {
+                let content = tokio::fs::read_to_string(list_path).await.with_context(|| {
+                    format!("读列表文件失败: {list_path}")
+                })?;
+                let parsed = url_list::parse(&content)
+                    .with_context(|| format!("解析列表文件失败: {list_path}"))?;
+                if parsed.skipped > 0 {
+                    println!(
+                        "[!] 跳过了 {} 行非 URL 内容（aria2 的 dir=/out= 之类选项行）",
+                        parsed.skipped
+                    );
                 }
-            };
-            let name = name
-                .clone()
-                .unwrap_or_else(|| url.rsplit('/').next().unwrap_or("download.bin").to_string());
-            let job = version::Job {
-                url: url.clone(),
-                path: name,
-                sha1: None,
-                size: Some(size),
-                mirrors: mirrors.clone(),
-            };
-            download::run(&[job], Path::new(dir), opts).await?;
+                println!("[generic:list] {} 个 URL <- {list_path}", parsed.entries.len());
+                // 一个进程内并发：连接池 / DNS / TLS 只建一次（这是 urls_file 相对
+                // shell 循环的根本优势）
+                let jobs: Vec<version::Job> = parsed
+                    .entries
+                    .into_iter()
+                    .map(|e| version::Job {
+                        url: e.url,
+                        path: e.file_name,
+                        sha1: None,
+                        size: None, // 未知 ⇒ 走单流；不为此多发 N 次 HEAD
+                        mirrors: Vec::new(),
+                    })
+                    .collect();
+                // 批量独立文件：一个挂了不该拖累其余
+                let mut batch = opts.clone();
+                batch.continue_on_error = true;
+                download::run(&jobs, root, &batch).await?;
+            } else {
+                let url = url.as_ref().expect("校验已保证 url 或 urls_file 有一个");
+                println!("[generic] {url}");
+                let client = download::client(opts)?;
+                let size = match size {
+                    Some(s) => *s,
+                    None => {
+                        let resp = client.head(url).send().await?;
+                        download::header_content_length(&resp).ok_or_else(|| {
+                            anyhow::anyhow!("服务器未返回 Content-Length，请在脚本里显式给 size")
+                        })?
+                    }
+                };
+                let name = name
+                    .clone()
+                    .unwrap_or_else(|| url.rsplit('/').next().unwrap_or("download.bin").to_string());
+                let job = version::Job {
+                    url: url.clone(),
+                    path: name,
+                    sha1: None,
+                    size: Some(size),
+                    mirrors: mirrors.clone(),
+                };
+                download::run(&[job], root, opts).await?;
+            }
         }
         config::TaskSpec::Pack { file, dir } => {
             println!("[pack] {file} -> {dir}");

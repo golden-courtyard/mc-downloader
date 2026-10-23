@@ -56,10 +56,21 @@ pub enum TaskSpec {
     /// 下载单个 URL
     #[serde(rename = "generic")]
     Generic {
-        url: String,
+        /// 单个 URL。与 `urls_file` **二选一**（都给会报错）。
+        #[serde(default)]
+        url: Option<String>,
+        /// 列表文件：一行一个 URL（对齐 aria2 的 `-i`）。与 `url` 二选一。
+        #[serde(default)]
+        urls_file: Option<String>,
         dir: String,
+        /// **仅 `url` 模式可用**：`urls_file` 下给了会报错（多文件用一个名字没有意义，
+        /// 允许就等于静默不生效）
+        #[serde(default)]
         name: Option<String>,
+        /// **仅 `url` 模式可用**（同上）。省略则 HEAD 探测。
+        #[serde(default)]
         size: Option<u64>,
+        /// **仅 `url` 模式可用**（同上）：多文件无法表达"谁是同内容的镜像"。
         #[serde(default)]
         mirrors: Vec<String>,
     },
@@ -99,6 +110,52 @@ impl Config {
                     "第 {} 个任务是 generic 且 size = 0，会导致不分片；请给真实大小或省略",
                     i + 1
                 );
+            }
+            // generic 的 url / urls_file 二选一；urls_file 模式禁用单文件字段
+            if let TaskSpec::Generic {
+                url,
+                urls_file,
+                name,
+                size,
+                mirrors,
+                ..
+            } = t
+            {
+                match (url.is_some(), urls_file.is_some()) {
+                    (true, true) => anyhow::bail!(
+                        "第 {} 个任务同时给了 `url` 和 `urls_file`。这两个是二选一的，\
+                         请删掉一个（同时给没法判断你要下几个文件）",
+                        i + 1
+                    ),
+                    (false, false) => anyhow::bail!(
+                        "第 {} 个任务既没有 `url` 也没有 `urls_file`。\
+                         单个文件用 `url = \"...\"`，一批用 `urls_file = \"list.txt\"`",
+                        i + 1
+                    ),
+                    _ => {}
+                }
+                if urls_file.is_some() {
+                    let mut bad: Vec<&str> = Vec::new();
+                    if name.is_some() {
+                        bad.push("name");
+                    }
+                    if size.is_some() {
+                        bad.push("size");
+                    }
+                    if !mirrors.is_empty() {
+                        bad.push("mirrors");
+                    }
+                    if !bad.is_empty() {
+                        anyhow::bail!(
+                            "第 {} 个任务是 `urls_file` 模式，不能再给 `{}`。\
+                             这些字段是“针对单个文件”的：一批文件共用一个名字/大小没有意义，\
+                             mirrors 也无法表达“哪些 URL 是同一文件的镜像”。\
+                             需要的话请拆成多个 `url` 任务",
+                            i + 1,
+                            bad.join("` / `")
+                        );
+                    }
+                }
             }
         }
         Ok(())
