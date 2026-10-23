@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use mc_downloader::download::DownloadOpts;
-use mc_downloader::{config, download, fabric, forge, pack, url_list, vanilla, version};
+use mc_downloader::{config, download, fabric, forge, pack, progress, url_list, vanilla, version};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -37,6 +37,10 @@ struct Args {
     /// 建连超时与单次读超时（秒，默认 30）。不是整请求总时限
     #[arg(long, global = true)]
     timeout: Option<u64>,
+
+    /// 全局总带宽上限，如 `5M` / `500K`（1024 进制；纯数字 = 字节/秒）
+    #[arg(long, global = true)]
+    max_speed: Option<String>,
 
     #[command(subcommand)]
     cmd: Cmd,
@@ -93,6 +97,14 @@ async fn main() -> Result<()> {
 
     // CLI 显式给 > 内置默认（脚本模式下，`run` 分支再叠加配置文件的值）
     let dflt = DownloadOpts::default();
+
+    // 限速：CLI 的非法写法要在启动时立刻报错，不能静默当成"不限速"
+    let cli_max_speed = match args.max_speed.as_deref() {
+        Some(s) => Some(progress::parse_speed(s).ok_or_else(|| {
+            anyhow::anyhow!("--max-speed 解析失败：`{s}`（例：5M / 500K / 1048576）")
+        })?),
+        None => None,
+    };
     let cli = DownloadOpts {
         proxy: args.proxy.clone().filter(|p| !p.trim().is_empty()),
         retries: args.retry.unwrap_or(dflt.retries),
@@ -100,7 +112,8 @@ async fn main() -> Result<()> {
         piece_conns: args.piece_conns.unwrap_or(dflt.piece_conns),
         adaptive: args.adaptive.unwrap_or(dflt.adaptive),
         timeout_secs: args.timeout.unwrap_or(dflt.timeout_secs),
-                continue_on_error: false,
+        continue_on_error: false,
+        max_speed: cli_max_speed,
     };
     let net = cli.proxy.as_deref().unwrap_or("直连");
 
@@ -142,6 +155,18 @@ async fn main() -> Result<()> {
                 // 配置文件不暴露这个开关：它是 main.rs 按任务类型决定的
                 // （urls_file 批量任务在下面单点覆盖成 true）
                 continue_on_error: false,
+                // 优先级：CLI > 配置文件；两边都没有 = 不限速
+                max_speed: match cli.max_speed {
+                    Some(v) => Some(v),
+                    None => match cfg.download.max_speed.as_deref() {
+                        Some(s) => Some(progress::parse_speed(s).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "配置里的 download.max_speed 解析失败：`{s}`\n                                   写法：5M / 500K / 纯数字（字节/秒）"
+                            )
+                        })?),
+                        None => None,
+                    },
+                },
             };
 
             let total = cfg.tasks.len();

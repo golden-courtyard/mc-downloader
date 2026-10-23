@@ -51,6 +51,11 @@ pub struct DownloadOpts {
     /// 不该让后面 95 个白等。**仍然返回 Err（退出码非 0）+ 列出失败项**，
     /// 只是其余文件都已下完。
     pub continue_on_error: bool,
+    /// 全局总带宽上限（字节/秒）。`None` = 不限速。
+    ///
+    /// **是全局的，不是每连接一份** —— 所有 chunk 都过同一个令牌桶
+    /// （位置在 `Progress::add_throttled`）。
+    pub max_speed: Option<u64>,
 }
 
 impl Default for DownloadOpts {
@@ -63,6 +68,7 @@ impl Default for DownloadOpts {
             adaptive: false,
             timeout_secs: DEFAULT_TIMEOUT_SECS,
             continue_on_error: false,
+            max_speed: None,
         }
     }
 }
@@ -73,6 +79,20 @@ impl DownloadOpts {
         let mut o = self.clone();
         o.concurrency = (self.concurrency / n.max(1)).max(1);
         o
+    }
+}
+
+/// 把人可读的速率格式化出来（`5M` → `5.0 MB/s`）。
+fn human_rate(bytes_per_sec: u64) -> String {
+    let f = bytes_per_sec as f64;
+    if f >= 1024.0 * 1024.0 * 1024.0 {
+        format!("{:.1} GB", f / (1024.0 * 1024.0 * 1024.0))
+    } else if f >= 1024.0 * 1024.0 {
+        format!("{:.1} MB", f / (1024.0 * 1024.0))
+    } else if f >= 1024.0 {
+        format!("{:.1} KB", f / 1024.0)
+    } else {
+        format!("{bytes_per_sec} B")
     }
 }
 
@@ -144,7 +164,13 @@ pub async fn run(jobs: &[Job], root: &Path, opts: &DownloadOpts) -> Result<()> {
     let client = client(opts)?;
 
     let total_bytes: u64 = jobs.iter().filter_map(|j| j.size).sum();
-    let pg = Progress::new(total_bytes);
+    let pg = match opts.max_speed {
+        Some(rate) => {
+            println!("[*] 限速: {}/s", human_rate(rate));
+            Progress::with_limit(total_bytes, rate)
+        }
+        None => Progress::new(total_bytes),
+    };
     let reporter = pg.spawn_reporter();
 
     let total = jobs.len();
@@ -282,7 +308,8 @@ async fn one_stream(
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.with_context(|| format!("读取响应流失败: {}", job.url))?;
         hasher.update(&chunk);
-        pg.add(chunk.len() as u64);
+        // 限速点：**真实下载的字节**才扣令牌（续传补记进度不走这里）
+        pg.add_throttled(chunk.len() as u64).await;
         file.write_all(&chunk).await?;
     }
     file.flush().await?;
@@ -664,7 +691,8 @@ async fn fetch_piece(
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
-        pg.add(chunk.len() as u64);
+        // 限速点：分片 worker 也过同一个令牌桶 ⇒ 总带宽是全局上限，不是每连接各一份
+        pg.add_throttled(chunk.len() as u64).await;
         buf.extend_from_slice(&chunk);
     }
     if buf.len() != expect {

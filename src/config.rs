@@ -38,6 +38,9 @@ pub struct Download {
     pub piece_conns: Option<usize>,
     /// AIMD 自适应
     pub adaptive: Option<bool>,
+    /// 全局总带宽上限，写法 `5M` / `500K` / 纯数字（字节/秒）。
+    /// **是全局的，不是每连接一份。**
+    pub max_speed: Option<String>,
 }
 
 /// 一个下载任务（`[[task]]` 数组元素，按 `kind` 区分）
