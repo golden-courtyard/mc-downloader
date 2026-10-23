@@ -16,6 +16,13 @@ struct Profile {
 struct Lib {
     name: String,
     url: String,
+    /// Fabric meta 的 profile 里实际给了 `sha1` / `sha256` / `size`，
+    /// 但**不是每个库都有**（实测 8 个里 6 个有 sha1）。
+    /// 有就保留：既能做完整性校验，也能让 >8MB 的库走分片。
+    #[serde(default)]
+    sha1: Option<String>,
+    #[serde(default)]
+    size: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -110,8 +117,8 @@ pub async fn install(mc: &str, loader: &str, root: &Path, opts: &DownloadOpts) -
         jobs.push(Job {
             url: format!("{}/{rel}", lib.url.trim_end_matches('/')),
             path: format!("libraries/{rel}"),
-            sha1: None,
-            size: None,
+            sha1: lib.sha1.clone(),
+            size: lib.size,
             mirrors: Vec::new(),
         });
     }

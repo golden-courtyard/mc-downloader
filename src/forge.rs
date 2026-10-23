@@ -83,6 +83,27 @@ pub fn pick_promo_version(json: &str, mc: &str) -> Result<String> {
     )
 }
 
+/// Forge 的库只该来自这两个官方 maven（**纯函数**，可单测）。
+///
+/// 防的是「install_profile 被篡改 / 上游变更，某个 library 的 url 指向别处」
+/// —— 我们不希望自己变成一个「照着任意 URL 下载」的执行器。
+pub fn is_allowed_forge_host(url: &str) -> bool {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or("");
+    let host = rest.split('/').next().unwrap_or("").to_ascii_lowercase();
+    matches!(
+        host.as_str(),
+        "maven.minecraftforge.net"
+            | "files.minecraftforge.net"
+            | "maven.neoforged.net"
+            | "libraries.minecraft.net"
+            | "piston-meta.mojang.com"
+            | "launchermeta.mojang.com"
+    )
+}
+
 /// 查该 MC 版本最新的 Forge（先 recommended，后 latest）。网络失败 ⇒ 报错，**不静默跳过**。
 pub async fn latest_forge(mc: &str, opts: &DownloadOpts) -> Result<String> {
     let client = crate::download::client(opts)?;
@@ -119,6 +140,14 @@ pub fn jobs_from_profiles(jsons: &[(&str, &str)]) -> Result<Vec<Job>> {
                 continue;
             };
             if art.path.is_empty() || art.url.is_empty() {
+                continue;
+            }
+            // 只认官方 maven；不认识的源跳过并警告（一个库不合格不该毁掉整次安装）
+            if !is_allowed_forge_host(&art.url) {
+                eprintln!(
+                    "[!] 跳过非官方源的 library: {} -> {}",
+                    lib.name, art.url
+                );
                 continue;
             }
             // 两个 json 会有重叠（如 forge / fmlcore），按 maven path 去重
@@ -353,14 +382,14 @@ mod tests {
     fn profile_skips_processor_deps_without_artifact() {
         // 第一条有 artifact，第二条没有（processor 依赖），第三条 url 为空
         let json = r#"{"libraries":[
-            {"name":"a:b:1","downloads":{"artifact":{"path":"a/b/1/b-1.jar","url":"https://x/b-1.jar","sha1":"aa","size":10}}},
+            {"name":"a:b:1","downloads":{"artifact":{"path":"a/b/1/b-1.jar","url":"https://maven.minecraftforge.net/b-1.jar","sha1":"aa","size":10}}},
             {"name":"c:d:2"},
             {"name":"e:f:3","downloads":{"artifact":{"path":"e/f/3/f-3.jar","url":""}}}
         ]}"#;
         let jobs = jobs_from_profiles(&[("install_profile.json", json)]).unwrap();
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].path, "libraries/a/b/1/b-1.jar");
-        assert_eq!(jobs[0].url, "https://x/b-1.jar");
+        assert_eq!(jobs[0].url, "https://maven.minecraftforge.net/b-1.jar");
         assert_eq!(jobs[0].sha1.as_deref(), Some("aa"));
         assert_eq!(jobs[0].size, Some(10));
     }
@@ -376,16 +405,29 @@ mod tests {
     fn merges_two_jsons_and_dedups_by_path() {
         // a 在两个 json 里都有（重复），b 只在第二个里
         let p1 = r#"{"libraries":[
-            {"name":"x:a:1","downloads":{"artifact":{"path":"x/a/1/a-1.jar","url":"https://x/a-1.jar"}}}
+            {"name":"x:a:1","downloads":{"artifact":{"path":"x/a/1/a-1.jar","url":"https://maven.minecraftforge.net/a-1.jar"}}}
         ]}"#;
         let p2 = r#"{"libraries":[
-            {"name":"x:a:1","downloads":{"artifact":{"path":"x/a/1/a-1.jar","url":"https://x/a-1.jar"}}},
-            {"name":"y:b:2","downloads":{"artifact":{"path":"y/b/2/b-2.jar","url":"https://x/b-2.jar"}}}
+            {"name":"x:a:1","downloads":{"artifact":{"path":"x/a/1/a-1.jar","url":"https://maven.minecraftforge.net/a-1.jar"}}},
+            {"name":"y:b:2","downloads":{"artifact":{"path":"y/b/2/b-2.jar","url":"https://maven.minecraftforge.net/b-2.jar"}}}
         ]}"#;
         let jobs = jobs_from_profiles(&[("p1", p1), ("p2", p2)]).unwrap();
         assert_eq!(jobs.len(), 2, "重复的 path 要去掉: {:?}", jobs.iter().map(|j| &j.path).collect::<Vec<_>>());
         assert!(jobs.iter().any(|j| j.path == "libraries/x/a/1/a-1.jar"));
         assert!(jobs.iter().any(|j| j.path == "libraries/y/b/2/b-2.jar"));
+    }
+
+    #[test]
+    fn only_official_maven_hosts_are_allowed() {
+        assert!(is_allowed_forge_host("https://maven.minecraftforge.net/a/b.jar"));
+        assert!(is_allowed_forge_host("https://files.minecraftforge.net/x"));
+        assert!(is_allowed_forge_host("https://maven.neoforged.net/releases/x.jar"));
+        assert!(is_allowed_forge_host("https://libraries.minecraft.net/x.jar"));
+        assert!(!is_allowed_forge_host("https://evil.example.com/x.jar"));
+        assert!(!is_allowed_forge_host("https://maven.minecraftforge.net.evil.com/x"));
+        assert!(!is_allowed_forge_host("http://127.0.0.1:8080/x.jar"));
+        assert!(!is_allowed_forge_host(""), "空串要判 false");
+        assert!(!is_allowed_forge_host("not a url"));
     }
 
     #[test]

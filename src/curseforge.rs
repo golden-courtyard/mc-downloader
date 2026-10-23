@@ -192,6 +192,19 @@ pub enum RealUrl {
 /// ⇒ 在这里先 HEAD 一次（**禁止跟随重定向**）拿 `Location`，后续分片直接用真地址。
 ///
 /// `client` 必须是**不跟随重定向**的那个（调用方建一次复用，别每个 URL 建一个）。
+/// CF 的 302 目标只该是 forgecdn.net 的子域（`mediafilez.forgecdn.net` 等）。
+///
+/// 防的是「API 被劫持返回恶意 Location」——我们会跟着它去下载，
+/// 等于把「下什么」的决定权交给了响应头。
+pub fn is_allowed_cdn_host(url: &str) -> bool {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or("");
+    let host = rest.split('/').next().unwrap_or("").to_ascii_lowercase();
+    host == "forgecdn.net" || host.ends_with(".forgecdn.net")
+}
+
 pub async fn resolve_real_url(client: &reqwest::Client, url: &str) -> Result<RealUrl> {
     let r = client.head(url).send().await.with_context(|| {
         format!("HEAD {url} 失败（拿不到真实地址，分片可能 404）")
@@ -212,6 +225,10 @@ pub async fn resolve_real_url(client: &reqwest::Client, url: &str) -> Result<Rea
                 .ok_or_else(|| anyhow::anyhow!("{url} 返回 {status} 但没有 Location 头"))?;
             let abs = resolve_location(url, loc)
                 .with_context(|| format!("解析 Location 失败: {loc}"))?;
+            // 302 的目标只该是 forgecdn.net —— 否则等于把「下什么」交给了响应头
+            if !is_allowed_cdn_host(&abs) {
+                anyhow::bail!("{url} 的 302 指向了非 forgecdn.net 的地址，拒绝跟随：{abs}");
+            }
             Ok(RealUrl::Ok { url: abs, size: clen })
         }
         200 => Ok(RealUrl::Ok {
@@ -844,6 +861,17 @@ mod tests {
         assert_eq!(entries[0].sha1.as_deref(), Some("abc"));
         assert_eq!(manual.len(), 1);
         assert_eq!(manual[0].name, "Playmate");
+    }
+
+    #[test]
+    fn only_forgecdn_hosts_are_followed() {
+        assert!(is_allowed_cdn_host("https://mediafilez.forgecdn.net/files/1/2/a.jar"));
+        assert!(is_allowed_cdn_host("https://edge.forgecdn.net/files/1/2/a.jar"));
+        assert!(is_allowed_cdn_host("https://forgecdn.net/x"));
+        assert!(!is_allowed_cdn_host("https://evil.com/x.jar"));
+        assert!(!is_allowed_cdn_host("https://forgecdn.net.evil.com/x"), "后缀伪装要挡住");
+        assert!(!is_allowed_cdn_host("https://notforgecdn.net/x"));
+        assert!(!is_allowed_cdn_host(""));
     }
 
     #[test]
