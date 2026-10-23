@@ -117,6 +117,39 @@ mc-downloader pack "xxx.mrpack" -d "D:/Games/.minecraft"
 
 ---
 
+### 探测多个源的速度（选 mirrors 用）
+
+```bash
+mc-downloader probe <url1> <url2> [...] --seconds 5
+```
+
+**输出按吞吐降序排名**，把快的填进 `mirrors`：
+
+```toml
+[[task]]
+kind = "generic"
+url = "https://github.com/.../big.zip"        # 主 URL
+mirrors = ["https://mirror.example.com/big.zip"]   # 内容相同的其它源
+dir = "D:/Downloads"
+```
+
+**下载时 `SourcePool` 会按实测吞吐（EWMA）把分片分配给各源** —— 不是"主源挂了才用镜像"，
+而是**一开始就按快慢分配**。
+
+**实测差距可以很大**（同一台机器、同一代理）：
+
+```
+GitHub release :   25–92 KB/s
+清华 TUNA      : 10.9–35 MB/s     ← 差 400 倍左右
+```
+
+⇒ **先 `probe` 一下再填 `mirrors`，比盲目加镜像有用得多。**
+
+> ⚠️ **本工具不内置任何非官方镜像**，也不自动把 GitHub 换成第三方镜像 ——
+> 用哪个源由你决定。`probe` 只负责测，不负责选。
+
+---
+
 ## 支持范围
 
 | 输入 | 支持 |

@@ -83,7 +83,7 @@ impl DownloadOpts {
 }
 
 /// 把人可读的速率格式化出来（`5M` → `5.0 MB/s`）。
-fn human_rate(bytes_per_sec: u64) -> String {
+pub fn human_rate(bytes_per_sec: u64) -> String {
     let f = bytes_per_sec as f64;
     if f >= 1024.0 * 1024.0 * 1024.0 {
         format!("{:.1} GB", f / (1024.0 * 1024.0 * 1024.0))
