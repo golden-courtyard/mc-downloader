@@ -172,10 +172,28 @@ GitHub release :   25–92 KB/s
 
 ## 特性
 
-- **并发 16** 下载（`buffer_unordered`），tokio 多线程运行时
-- **逐文件 SHA1 校验**（Modrinth 的 `hashes.sha1` / 原版 manifest 的 `sha1`）
-- **断点续传**：已存在且哈希匹配的文件直接跳过
-- **平台过滤**：`libraries` 里按 `rules` 只下 Windows 的，native 走 `classifiers["natives-windows*"]`
+### 下载
+
+- **并发 16 个文件**（`buffer_unordered`），tokio 多线程运行时。
+  `run --parallel` 可让多个 `[[task]]` 并行，总并发会被均分（`split_for`），不会 N×16
+- **单文件分片**：≥ 8 MB 的文件切分片、`piece_conns` 个连接并行（默认 4）
+- **断点续传**：`.part` + `.part.state` 记录哪些片段已完成，重跑只补缺口。
+  **只有 `.part` 没有状态文件时从头下**（稀疏文件的空洞读出来是 0，宁可重下不拼坏文件）
+- **逐文件 SHA1 校验**：Modrinth / 原版 manifest / CurseForge 都提供哈希；
+  内容被篡改一个字节会被发现并重下（用变异测试验过）
+- **多源按实测吞吐分配**：`mirrors` 给多个源，`SourcePool` 用 EWMA（`ewma_bps` + `fail_streak`）
+  挑最快的分片 —— **不是"主源挂了才换"**
+- **全局限速**：`--max-speed 5M`，令牌桶，限的是**总带宽**而非每连接
+- **批量 URL 列表**：`urls_file = "list.txt"`，对齐 aria2 的 `-i` 格式
+  （选项行会跳过并计数）；**一个失败不中断**，最后统一报失败项 + 退出码非 0
+
+### 平台
+
+- **平台过滤**：`libraries` 按 `rules` 只下当前平台的，native 走 `classifiers["natives-windows*"]`
+
+### 其他
+
+- **源速度探测**：`probe <url1> <url2> ...` 串行各测 N 秒，报吞吐排名（填 `mirrors` 前先探）
 - **纯本地**：无账号、无遥测、无网络请求以外的副作用
 
 ---
