@@ -2,15 +2,96 @@
 //!
 //! 用原子变量而非锁 —— 16 个并发任务每写一块都更新，加锁会成为新瓶颈。
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// 令牌桶限速。
+///
+/// **只在设了 `max_speed` 时才存在**（`Progress::throttle` 为 `Some`），
+/// 未设时 `Progress::add_throttled` 只多一次 `Option` 分支就返回 —— 不给
+/// 「没设限速」的路径引入每 chunk 的锁开销。
+///
+/// 令牌上限取 **1 秒的量**：否则长时间空闲后 `tokens` 攒满，恢复的第一秒会跑 2 倍速。
+#[derive(Debug)]
+pub struct Throttle {
+    rate: u64, // 字节/秒
+    state: Mutex<ThrottleState>,
+}
+
+#[derive(Debug)]
+struct ThrottleState {
+    tokens: f64,
+    last: Instant,
+}
+
+impl Throttle {
+    pub fn new(rate: u64) -> Self {
+        Self {
+            rate: rate.max(1),
+            state: Mutex::new(ThrottleState {
+                tokens: rate as f64,
+                last: Instant::now(),
+            }),
+        }
+    }
+
+    /// 消费 `n` 个令牌；不够就等到够。
+    ///
+    /// 用 `std::sync::Mutex` 而不是 async mutex：临界区只有几微秒（算数 + 赋值），
+    /// async mutex 的调度开销反而更大。**不要在持锁期间 await** —— 上面那个
+    /// `wait` 是算完就放锁，sleep 在锁外。
+    pub async fn acquire(&self, n: u64) {
+        loop {
+            let wait_secs = {
+                let mut st = self.state.lock().expect("throttle 锁中毒");
+                let now = Instant::now();
+                let elapsed = now.duration_since(st.last).as_secs_f64();
+                let cap = self.rate as f64; // 最多攒 1 秒的量
+                st.tokens = (st.tokens + elapsed * self.rate as f64).min(cap);
+                st.last = now;
+
+                if st.tokens >= n as f64 {
+                    st.tokens -= n as f64;
+                    return;
+                }
+                (n as f64 - st.tokens) / self.rate as f64
+            };
+            // 锁已释放，再 sleep
+            tokio::time::sleep(Duration::from_secs_f64(wait_secs)).await;
+        }
+    }
+}
+
+/// 解析 `5M` / `500K` / `1048576` 这类写法（纯数字 = 字节/秒）。
+///
+/// 单位用 1024 进制（和磁盘/网络的常见口径一致）。**非法输入返回 None**，
+/// 由调用方决定报错 —— 这里不 panic。
+pub fn parse_speed(s: &str) -> Option<u64> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let (num, mult) = match t.chars().last()? {
+        'k' | 'K' => (&t[..t.len() - 1], 1024u64),
+        'm' | 'M' => (&t[..t.len() - 1], 1024 * 1024),
+        'g' | 'G' => (&t[..t.len() - 1], 1024 * 1024 * 1024),
+        _ => (t, 1),
+    };
+    let v: f64 = num.trim().parse().ok()?;
+    if !v.is_finite() || v <= 0.0 {
+        return None;
+    }
+    Some((v * mult as f64) as u64)
+}
 
 #[derive(Debug)]
 pub struct Progress {
     done: AtomicU64,
     total: AtomicU64,
     start: Instant,
+    /// `None` = 不限速。设了才走令牌桶。
+    throttle: Option<Arc<Throttle>>,
 }
 
 impl Progress {
@@ -19,7 +100,30 @@ impl Progress {
             done: AtomicU64::new(0),
             total: AtomicU64::new(total),
             start: Instant::now(),
+            throttle: None,
         })
+    }
+
+    /// 带总带宽上限（字节/秒）。
+    pub fn with_limit(total: u64, bytes_per_sec: u64) -> Arc<Self> {
+        Arc::new(Self {
+            done: AtomicU64::new(0),
+            total: AtomicU64::new(total),
+            start: Instant::now(),
+            throttle: Some(Arc::new(Throttle::new(bytes_per_sec))),
+        })
+    }
+
+    /// 限速版：先等令牌，再记账。**未设限速时只有一次 `Option` 分支**。
+    pub async fn add_throttled(&self, n: u64) {
+        if let Some(t) = &self.throttle {
+            t.acquire(n).await;
+        }
+        self.add(n);
+    }
+
+    pub fn is_limited(&self) -> bool {
+        self.throttle.is_some()
     }
 
     pub fn add(&self, n: u64) {
@@ -106,6 +210,48 @@ fn mmss(secs: f64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_speed_units() {
+        assert_eq!(parse_speed("5M"), Some(5 * 1024 * 1024));
+        assert_eq!(parse_speed("500K"), Some(500 * 1024));
+        assert_eq!(parse_speed("1048576"), Some(1048576));
+        assert_eq!(parse_speed("1G"), Some(1024 * 1024 * 1024));
+        assert_eq!(parse_speed(" 2m "), Some(2 * 1024 * 1024), "要容忍空白");
+        assert_eq!(parse_speed("0"), None, "0 无意义");
+        assert_eq!(parse_speed(""), None);
+        assert_eq!(parse_speed("abc"), None);
+        assert_eq!(parse_speed("5X"), None, "未知单位要拒绝，不能当字节");
+        assert_eq!(parse_speed("-5M"), None);
+    }
+
+    #[tokio::test]
+    async fn throttle_allows_initial_burst_then_blocks() {
+        // 速率 1000 B/s，初始令牌 1000 ⇒ 先给 1000 不该等
+        let t = Throttle::new(1000);
+        let t0 = Instant::now();
+        t.acquire(1000).await;
+        assert!(t0.elapsed() < Duration::from_millis(50), "初始桶内不该等: {:?}", t0.elapsed());
+
+        // 再要 500 ⇒ 桶空了，要等约 0.5s
+        let t1 = Instant::now();
+        t.acquire(500).await;
+        let waited = t1.elapsed();
+        assert!(waited >= Duration::from_millis(400), "应该等约 0.5s，实际 {waited:?}");
+    }
+
+    #[tokio::test]
+    async fn unlimited_add_does_not_block() {
+        let p = Progress::new(1000);
+        assert!(!p.is_limited());
+        let t0 = Instant::now();
+        for _ in 0..1000 {
+            p.add_throttled(1024).await;
+        }
+        assert!(t0.elapsed() < Duration::from_millis(50), "未限速不该有等待");
+        assert_eq!(p.done(), 1000 * 1024);
+    }
     use super::*;
 
     #[test]
