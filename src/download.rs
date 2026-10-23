@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use futures::stream::{self, StreamExt};
 use sha1::{Digest, Sha1};
 use std::io::{Seek, SeekFrom, Write};
@@ -42,6 +42,15 @@ pub struct DownloadOpts {
     pub adaptive: bool,
     /// 建连超时 + 读超时（秒）
     pub timeout_secs: u64,
+    /// 单个文件失败时是否继续下其余的。
+    ///
+    /// **默认 `false`**：MC 场景（原版 / 整合包 / 加载器）要求"全有或全无"——
+    /// 少一个文件游戏就坏了，中断比"下完了但缺东西"更好。
+    ///
+    /// `urls_file`（批量独立文件）设 `true`：100 个文件里第 5 个挂了，
+    /// 不该让后面 95 个白等。**仍然返回 Err（退出码非 0）+ 列出失败项**，
+    /// 只是其余文件都已下完。
+    pub continue_on_error: bool,
 }
 
 impl Default for DownloadOpts {
@@ -53,6 +62,7 @@ impl Default for DownloadOpts {
             piece_conns: DEFAULT_PIECE_CONNS,
             adaptive: false,
             timeout_secs: DEFAULT_TIMEOUT_SECS,
+            continue_on_error: false,
         }
     }
 }
@@ -152,13 +162,22 @@ pub async fn run(jobs: &[Job], root: &Path, opts: &DownloadOpts) -> Result<()> {
     let mut done = 0usize;
     let mut cached = 0usize;
 
+    let mut failed: Vec<String> = Vec::new();
     while let Some(r) = stream.next().await {
-        let (path, was_cached) = r.with_context(|| "下载中断")?;
-        done += 1;
-        if was_cached {
-            cached += 1;
-        } else {
-            println!("  [{done}/{total}] {path}");
+        match r {
+            Ok((path, was_cached)) => {
+                done += 1;
+                if was_cached {
+                    cached += 1;
+                } else {
+                    println!("  [{done}/{total}] {path}");
+                }
+            }
+            Err(e) if opts.continue_on_error => {
+                // 记下来继续；最后统一报，不在这里打印（并发下会串行刷屏）
+                failed.push(format!("{e:#}"));
+            }
+            Err(e) => return Err(e).with_context(|| "下载中断"),
         }
     }
 
@@ -169,6 +188,17 @@ pub async fn run(jobs: &[Job], root: &Path, opts: &DownloadOpts) -> Result<()> {
         done.saturating_sub(cached),
         cached
     );
+
+    // continue_on_error 下：失败项攒到这里统一报。
+    // **仍然返回 Err** —— 退出码非 0，脚本能感知；但其余文件都已下完。
+    if !failed.is_empty() {
+        bail!(
+            "{} 个文件失败（其余 {} 个已完成）：\n  {}",
+            failed.len(),
+            done,
+            failed.join("\n  ")
+        );
+    }
     Ok(())
 }
 
