@@ -175,6 +175,53 @@ dir  = "D:/Downloads"
 
 ⇒ **做到第 2 档就够了**：**工具负责测，用户负责选。**
 
+**⚠️ 已知缺口（2026-10-24 记，暂不做）**
+
+`SourcePool::pick()` 是**纯贪婪**：每次都挑当前 `ewma_bps` 最高的源。
+
+```
+早期源 A 运气好 → EWMA 虚高 → 分片全给 A → 源 B 不再更新 EWMA
+⇒ A 后来变慢也发现不了（B 的数据早过期）
+```
+
+**这是多臂老虎机的「纯利用、不探索」** —— 会锁定一个可能错误的选择。
+
+**方向上该借鉴的是**：每 N 个分片强制探一次 EWMA 最低的源（约 5 行代码）。
+
+**但现在不做**：`mirrors` 是用户手填的，通常 2–3 个且都是同内容镜像，
+**源少 + 人工筛选** ⇒ 纯贪婪的实际损失远小于「5 个源随机质量」的场景。
+
+**触发条件**：等 `mirrors` 真的被用起来（≥ 5 个源）再考虑。
+
+---
+
+**📄 学术依据（2026-10-24 查，附在 P4 后面供以后引用）**
+
+**① 为什么默认 4 个连接**（我们的 `piece_conns = 4`）
+
+《The End-to-End Performance Effects of Parallel TCP Sockets on a Lossy Wide-Area Network》：
+
+> the **optimal number of parallel TCP connections range from 4 (Netscape) to 12 (Psockets)
+> to a number between 4 and 20** depending on the window size (SLAC group)
+
+⇒ **Netscape 历史上选的就是 4**。我们的默认值不是随手定的。
+
+**② 多连接为什么「快」—— 不是带宽变多，是抢到更大份额**
+
+《Unbiased Experiments in Congested Networks》（arXiv 2110.00118）：
+
+> If n identical TCP connections share a bottleneck of capacity C, each gets C/n.
+> A group with two connections gets **2C/n, 100% larger**.
+>
+> **When all applications used two connections, their average throughput was identical
+> to when all used one.** Even worse, retransmission rates were higher.
+
+⇒ **多连接本质是「抢」，不是「增」**：
+- 服务器**不限速**、带宽够时 ⇒ **纯抢占**（对别人不公平，对自己也没真变快）
+- 单连接**被限速**时（如 GitHub 92 KB/s）⇒ **才是解药**
+
+⇒ **对外表述该写「对抗单流限速」，不能写「加速」**。
+
 ---
 
 ### ✅ P3 · GitHub 大文件实测 —— 已完成 2026-10-23 · **结论：只对 GitHub 成立，P2 待定**
