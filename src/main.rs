@@ -299,7 +299,7 @@ async fn main() -> Result<()> {
                 }
             }
             // 按吞吐降序，失败的排最后
-            results.sort_by(|a, b| b.1.unwrap_or(0).cmp(&a.1.unwrap_or(0)));
+            results.sort_by_key(|x| std::cmp::Reverse(x.1.unwrap_or(0)));
             println!("\n[*] 排名:");
             for (i, (u, n)) in results.iter().enumerate() {
                 let r = match n {

@@ -259,7 +259,6 @@ mod tests {
         assert!(t0.elapsed() < Duration::from_millis(50), "未限速不该有等待");
         assert_eq!(p.done(), 1000 * 1024);
     }
-    use super::*;
 
     #[test]
     fn human_units() {
