@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use futures::StreamExt;
 use clap::{Parser, Subcommand};
+use futures::StreamExt;
 use mc_downloader::download::DownloadOpts;
 use mc_downloader::{config, download, fabric, forge, pack, progress, url_list, vanilla, version};
 use std::path::{Path, PathBuf};
@@ -324,7 +324,11 @@ async fn main() -> Result<()> {
 /// 执行单个任务（抽出来是为了能 join_all 并行）
 async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()> {
     match task {
-        config::TaskSpec::Mc { version, dir, loader } => {
+        config::TaskSpec::Mc {
+            version,
+            dir,
+            loader,
+        } => {
             println!("[mc] {version} -> {dir}");
             let root = Path::new(dir);
             vanilla::install(version, root, opts).await?;
@@ -370,9 +374,9 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
             let root = Path::new(dir);
             // 配置层已校验过「url / urls_file 二选一」，这里按存在哪个走
             if let Some(list_path) = urls_file {
-                let content = tokio::fs::read_to_string(list_path).await.with_context(|| {
-                    format!("读列表文件失败: {list_path}")
-                })?;
+                let content = tokio::fs::read_to_string(list_path)
+                    .await
+                    .with_context(|| format!("读列表文件失败: {list_path}"))?;
                 let parsed = url_list::parse(&content)
                     .with_context(|| format!("解析列表文件失败: {list_path}"))?;
                 if parsed.skipped > 0 {
@@ -381,7 +385,10 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
                         parsed.skipped
                     );
                 }
-                println!("[generic:list] {} 个 URL <- {list_path}", parsed.entries.len());
+                println!(
+                    "[generic:list] {} 个 URL <- {list_path}",
+                    parsed.entries.len()
+                );
                 // 一个进程内并发：连接池 / DNS / TLS 只建一次（这是 urls_file 相对
                 // shell 循环的根本优势）
                 let jobs: Vec<version::Job> = parsed
@@ -412,9 +419,9 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
                         })?
                     }
                 };
-                let name = name
-                    .clone()
-                    .unwrap_or_else(|| url.rsplit('/').next().unwrap_or("download.bin").to_string());
+                let name = name.clone().unwrap_or_else(|| {
+                    url.rsplit('/').next().unwrap_or("download.bin").to_string()
+                });
                 let job = version::Job {
                     url: url.clone(),
                     path: name,

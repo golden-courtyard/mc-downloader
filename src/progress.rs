@@ -232,13 +232,20 @@ mod tests {
         let t = Throttle::new(1000);
         let t0 = Instant::now();
         t.acquire(1000).await;
-        assert!(t0.elapsed() < Duration::from_millis(50), "初始桶内不该等: {:?}", t0.elapsed());
+        assert!(
+            t0.elapsed() < Duration::from_millis(50),
+            "初始桶内不该等: {:?}",
+            t0.elapsed()
+        );
 
         // 再要 500 ⇒ 桶空了，要等约 0.5s
         let t1 = Instant::now();
         t.acquire(500).await;
         let waited = t1.elapsed();
-        assert!(waited >= Duration::from_millis(400), "应该等约 0.5s，实际 {waited:?}");
+        assert!(
+            waited >= Duration::from_millis(400),
+            "应该等约 0.5s，实际 {waited:?}"
+        );
     }
 
     #[tokio::test]

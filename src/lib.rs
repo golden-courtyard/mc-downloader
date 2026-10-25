@@ -14,6 +14,6 @@ pub mod piece;
 pub mod progress;
 pub mod scheduler;
 pub mod source;
-pub mod vanilla;
 pub mod url_list;
+pub mod vanilla;
 pub mod version;

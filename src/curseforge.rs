@@ -182,7 +182,10 @@ pub fn resolve_location(base: &str, loc: &str) -> Result<String> {
 
 /// 真实地址的解析结果
 pub enum RealUrl {
-    Ok { url: String, size: Option<u64> },
+    Ok {
+        url: String,
+        size: Option<u64>,
+    },
     /// 链路已死（404）—— 不是致命错误，该条进人工清单
     Dead(String),
 }
@@ -206,9 +209,11 @@ pub fn is_allowed_cdn_host(url: &str) -> bool {
 }
 
 pub async fn resolve_real_url(client: &reqwest::Client, url: &str) -> Result<RealUrl> {
-    let r = client.head(url).send().await.with_context(|| {
-        format!("HEAD {url} 失败（拿不到真实地址，分片可能 404）")
-    })?;
+    let r = client
+        .head(url)
+        .send()
+        .await
+        .with_context(|| format!("HEAD {url} 失败（拿不到真实地址，分片可能 404）"))?;
     let status = r.status().as_u16();
     let clen = r
         .headers()
@@ -223,13 +228,16 @@ pub async fn resolve_real_url(client: &reqwest::Client, url: &str) -> Result<Rea
                 .get(reqwest::header::LOCATION)
                 .and_then(|v| v.to_str().ok())
                 .ok_or_else(|| anyhow::anyhow!("{url} 返回 {status} 但没有 Location 头"))?;
-            let abs = resolve_location(url, loc)
-                .with_context(|| format!("解析 Location 失败: {loc}"))?;
+            let abs =
+                resolve_location(url, loc).with_context(|| format!("解析 Location 失败: {loc}"))?;
             // 302 的目标只该是 forgecdn.net —— 否则等于把「下什么」交给了响应头
             if !is_allowed_cdn_host(&abs) {
                 anyhow::bail!("{url} 的 302 指向了非 forgecdn.net 的地址，拒绝跟随：{abs}");
             }
-            Ok(RealUrl::Ok { url: abs, size: clen })
+            Ok(RealUrl::Ok {
+                url: abs,
+                size: clen,
+            })
         }
         200 => Ok(RealUrl::Ok {
             url: url.to_string(),
@@ -329,7 +337,9 @@ fn urlencode(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => o.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                o.push(b as char)
+            }
             b' ' => o.push('+'),
             _ => o.push_str(&format!("%{b:02X}")),
         }
@@ -543,9 +553,8 @@ async fn call(
                     tokio::time::sleep(std::time::Duration::from_millis(BATCH_SLEEP_MS)).await;
                     continue;
                 }
-                return Err(anyhow::Error::new(e).context(format!(
-                    "CurseForge {what} 网络失败（已重试 1 次）: {url}"
-                )));
+                return Err(anyhow::Error::new(e)
+                    .context(format!("CurseForge {what} 网络失败（已重试 1 次）: {url}")));
             }
         };
 
@@ -630,7 +639,9 @@ pub async fn resolve_all(
         }
 
         let meta = mods.get(&r.project_id);
-        let name = meta.map(|m| m.name.clone()).unwrap_or_else(|| format!("projectID {}", r.project_id));
+        let name = meta
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| format!("projectID {}", r.project_id));
         let slug = meta.map(|m| m.slug.clone()).unwrap_or_default();
 
         // 作者明确禁分发 ⇒ **不调 file 接口**（§14.4）
@@ -865,11 +876,18 @@ mod tests {
 
     #[test]
     fn only_forgecdn_hosts_are_followed() {
-        assert!(is_allowed_cdn_host("https://mediafilez.forgecdn.net/files/1/2/a.jar"));
-        assert!(is_allowed_cdn_host("https://edge.forgecdn.net/files/1/2/a.jar"));
+        assert!(is_allowed_cdn_host(
+            "https://mediafilez.forgecdn.net/files/1/2/a.jar"
+        ));
+        assert!(is_allowed_cdn_host(
+            "https://edge.forgecdn.net/files/1/2/a.jar"
+        ));
         assert!(is_allowed_cdn_host("https://forgecdn.net/x"));
         assert!(!is_allowed_cdn_host("https://evil.com/x.jar"));
-        assert!(!is_allowed_cdn_host("https://forgecdn.net.evil.com/x"), "后缀伪装要挡住");
+        assert!(
+            !is_allowed_cdn_host("https://forgecdn.net.evil.com/x"),
+            "后缀伪装要挡住"
+        );
         assert!(!is_allowed_cdn_host("https://notforgecdn.net/x"));
         assert!(!is_allowed_cdn_host(""));
     }
@@ -944,7 +962,9 @@ mod tests {
                 manual_reason: Some("API 查不到该文件（可能已被作者删除）".into()),
             },
         ];
-        let p = write_manual(&dir, &items).unwrap().expect("非空清单应写文件");
+        let p = write_manual(&dir, &items)
+            .unwrap()
+            .expect("非空清单应写文件");
         let text = std::fs::read_to_string(&p).unwrap();
 
         // 头部条数 + 1 基编号 + 可点的页面链接 + 各自的原因 + 重跑提示
@@ -1004,7 +1024,9 @@ mod tests {
 
     #[test]
     fn location_empty_is_an_error() {
-        let e = resolve_location("https://edge/x.jar", "   ").unwrap_err().to_string();
+        let e = resolve_location("https://edge/x.jar", "   ")
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("Location 为空"), "{e}");
         // base 缺 scheme 也要报错，别静默拼出个怪 URL
         assert!(resolve_location("edge/x.jar", "y.jar").is_err());

@@ -79,7 +79,12 @@ pub fn pick_promo_version(json: &str, mc: &str) -> Result<String> {
     mcs.dedup();
     bail!(
         "Forge 没有 MC {mc} 的发布版本。已发布的 MC 版本（末尾几个）：{}",
-        mcs.iter().rev().take(6).cloned().collect::<Vec<_>>().join(", ")
+        mcs.iter()
+            .rev()
+            .take(6)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
     )
 }
 
@@ -144,10 +149,7 @@ pub fn jobs_from_profiles(jsons: &[(&str, &str)]) -> Result<Vec<Job>> {
             }
             // 只认官方 maven；不认识的源跳过并警告（一个库不合格不该毁掉整次安装）
             if !is_allowed_forge_host(&art.url) {
-                eprintln!(
-                    "[!] 跳过非官方源的 library: {} -> {}",
-                    lib.name, art.url
-                );
+                eprintln!("[!] 跳过非官方源的 library: {} -> {}", lib.name, art.url);
                 continue;
             }
             // 两个 json 会有重叠（如 forge / fmlcore），按 maven path 去重
@@ -164,9 +166,7 @@ pub fn jobs_from_profiles(jsons: &[(&str, &str)]) -> Result<Vec<Job>> {
         }
     }
     if jobs.is_empty() {
-        bail!(
-            "两个 json 里没有任何可下载的 library（共 {total_libs} 条，全是 processor 依赖？）"
-        );
+        bail!("两个 json 里没有任何可下载的 library（共 {total_libs} 条，全是 processor 依赖？）");
     }
     Ok(jobs)
 }
@@ -206,12 +206,7 @@ fn has_java() -> bool {
 }
 
 /// 安装 Forge 到 `root`。返回版本 id。
-pub async fn install(
-    mc: &str,
-    forge: &str,
-    root: &Path,
-    opts: &DownloadOpts,
-) -> Result<String> {
+pub async fn install(mc: &str, forge: &str, root: &Path, opts: &DownloadOpts) -> Result<String> {
     let id = version_id(mc, forge);
     let client = crate::download::client(opts)?;
 
@@ -236,24 +231,29 @@ pub async fn install(
             .await?;
         tokio::fs::write(&ins_path, &body).await?;
     }
-    println!("[*] installer: {}（{} KB）", ins_path.display(), std::fs::metadata(&ins_path)?.len() / 1024);
+    println!(
+        "[*] installer: {}（{} KB）",
+        ins_path.display(),
+        std::fs::metadata(&ins_path)?.len() / 1024
+    );
 
     // ② 读 install_profile.json（在 installer jar 里）
     let pf = ins_path.clone();
-    let (profile_json, version_json) = tokio::task::spawn_blocking(move || -> Result<(String, String)> {
-        let f = std::fs::File::open(&pf)?;
-        let mut z = zip::ZipArchive::new(f).context("installer 不是合法 zip")?;
-        let mut read = |name: &str| -> Result<String> {
-            let mut e = z
-                .by_name(name)
-                .with_context(|| format!("installer 里没有 {name}"))?;
-            let mut s = String::new();
-            std::io::Read::read_to_string(&mut e, &mut s)?;
-            Ok(s)
-        };
-        Ok((read("install_profile.json")?, read("version.json")?))
-    })
-    .await??;
+    let (profile_json, version_json) =
+        tokio::task::spawn_blocking(move || -> Result<(String, String)> {
+            let f = std::fs::File::open(&pf)?;
+            let mut z = zip::ZipArchive::new(f).context("installer 不是合法 zip")?;
+            let mut read = |name: &str| -> Result<String> {
+                let mut e = z
+                    .by_name(name)
+                    .with_context(|| format!("installer 里没有 {name}"))?;
+                let mut s = String::new();
+                std::io::Read::read_to_string(&mut e, &mut s)?;
+                Ok(s)
+            };
+            Ok((read("install_profile.json")?, read("version.json")?))
+        })
+        .await??;
 
     // ⚠️ **两个 json 都要下**：`install_profile` 是安装用的 36 个，
     // 但 `--offline` 阶段 installer 检查的是 `version.json` 的 29 个**运行时**库
@@ -316,7 +316,15 @@ pub async fn install(
             "Forge installer 失败（exit {:?}）\n最后 20 行：\n{}\n{}",
             out.status.code(),
             tail.join("\n"),
-            stderr.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+            stderr
+                .lines()
+                .rev()
+                .take(5)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n")
         );
     }
 
@@ -397,7 +405,9 @@ mod tests {
     #[test]
     fn profile_without_downloadable_libs_is_an_error() {
         let json = r#"{"libraries":[{"name":"a:b:1"},{"name":"c:d:2"}]}"#;
-        let e = jobs_from_profiles(&[("install_profile.json", json)]).unwrap_err().to_string();
+        let e = jobs_from_profiles(&[("install_profile.json", json)])
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("没有任何可下载的 library"), "{e}");
     }
 
@@ -412,19 +422,32 @@ mod tests {
             {"name":"y:b:2","downloads":{"artifact":{"path":"y/b/2/b-2.jar","url":"https://<你的源>/b-2.jar"}}}
         ]}"#;
         let jobs = jobs_from_profiles(&[("p1", p1), ("p2", p2)]).unwrap();
-        assert_eq!(jobs.len(), 2, "重复的 path 要去掉: {:?}", jobs.iter().map(|j| &j.path).collect::<Vec<_>>());
+        assert_eq!(
+            jobs.len(),
+            2,
+            "重复的 path 要去掉: {:?}",
+            jobs.iter().map(|j| &j.path).collect::<Vec<_>>()
+        );
         assert!(jobs.iter().any(|j| j.path == "libraries/x/a/1/a-1.jar"));
         assert!(jobs.iter().any(|j| j.path == "libraries/y/b/2/b-2.jar"));
     }
 
     #[test]
     fn only_official_maven_hosts_are_allowed() {
-        assert!(is_allowed_forge_host("https://<你的源>/a/b.jar"));
+        assert!(is_allowed_forge_host(
+            "https://<你的源>/a/b.jar"
+        ));
         assert!(is_allowed_forge_host("https://<你的源>/x"));
-        assert!(is_allowed_forge_host("https://<你的源>/releases/x.jar"));
-        assert!(is_allowed_forge_host("https://<你的源>/x.jar"));
+        assert!(is_allowed_forge_host(
+            "https://<你的源>/releases/x.jar"
+        ));
+        assert!(is_allowed_forge_host(
+            "https://<你的源>/x.jar"
+        ));
         assert!(!is_allowed_forge_host("https://evil.example.com/x.jar"));
-        assert!(!is_allowed_forge_host("https://<你的源>.evil.com/x"));
+        assert!(!is_allowed_forge_host(
+            "https://<你的源>.evil.com/x"
+        ));
         assert!(!is_allowed_forge_host("http://127.0.0.1:8080/x.jar"));
         assert!(!is_allowed_forge_host(""), "空串要判 false");
         assert!(!is_allowed_forge_host("not a url"));
