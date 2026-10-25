@@ -156,7 +156,10 @@ mod tests {
     #[test]
     fn percent_decodes_the_name() {
         let p = parse("https://a.com/a%20b.zip").unwrap();
-        assert_eq!(p.entries[0].file_name, "a b.zip", "%20 要解码，否则用户以为下错了");
+        assert_eq!(
+            p.entries[0].file_name, "a b.zip",
+            "%20 要解码，否则用户以为下错了"
+        );
     }
 
     #[test]
@@ -193,7 +196,10 @@ https://a.com/2.zip
             .to_string();
         assert!(e.contains("同一个文件名"), "{e}");
         assert!(e.contains("1.zip"), "{e}");
-        assert!(e.contains("第 1 行") && e.contains("第 2 行"), "要列两个行号: {e}");
+        assert!(
+            e.contains("第 1 行") && e.contains("第 2 行"),
+            "要列两个行号: {e}"
+        );
     }
 
     #[test]

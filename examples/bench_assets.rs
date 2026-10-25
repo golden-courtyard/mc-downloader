@@ -31,7 +31,10 @@ async fn main() -> anyhow::Result<()> {
         .take(limit)
         .map(|s| s.to_string())
         .collect();
-    println!("[*] 代理={proxy:?} 并发={conc} 文件={} 写模式={wmode}", urls.len());
+    println!(
+        "[*] 代理={proxy:?} 并发={conc} 文件={} 写模式={wmode}",
+        urls.len()
+    );
 
     // mode=3：走 download::run（内部 buffer_unordered），用来对照手写 spawn 循环
     if wmode == 3 {
@@ -55,7 +58,11 @@ async fn main() -> anyhow::Result<()> {
         };
         let t0 = Instant::now();
         mc_downloader::download::run(&jobs, &root, &o2).await?;
-        println!("\n=== download::run 总耗时 {} ms（{} 个文件）===", t0.elapsed().as_millis(), jobs.len());
+        println!(
+            "\n=== download::run 总耗时 {} ms（{} 个文件）===",
+            t0.elapsed().as_millis(),
+            jobs.len()
+        );
         let _ = std::fs::remove_dir_all(&root);
         return Ok(());
     }
@@ -109,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
                 chunks += 1;
                 total += c.len() as u64;
                 if let Some(f) = per_chunk_file.as_mut() {
-                    let _ = f.write_all(&c).await;   // ← 模拟 one_stream：每 chunk 一次写
+                    let _ = f.write_all(&c).await; // ← 模拟 one_stream：每 chunk 一次写
                 } else {
                     buf.extend_from_slice(&c);
                 }
@@ -123,7 +130,14 @@ async fn main() -> anyhow::Result<()> {
             }
             let t_write = t3.elapsed().as_millis() as u64;
 
-            (i, t_conn, t_first, t_rest, t_write, format!("{}KB/{}块", total / 1024, chunks))
+            (
+                i,
+                t_conn,
+                t_first,
+                t_rest,
+                t_write,
+                format!("{}KB/{}块", total / 1024, chunks),
+            )
         }));
     }
 
