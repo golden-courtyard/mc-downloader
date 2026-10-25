@@ -181,7 +181,7 @@ pub fn version_id(mc: &str, forge: &str) -> String {
 /// **刻意不引入 `url` crate**：只支持 `http(s)://host:port` 这种形态，
 /// 与 `download.rs` 里 `reqwest::Proxy::all()` 接受的范围一致。
 /// IPv6 字面量（`[::1]:7897`）暂不支持 —— MC 场景里不会出现，真遇到再加。
-fn proxy_parts(opts: &DownloadOpts) -> Option<(String, u16)> {
+pub fn proxy_parts(opts: &DownloadOpts) -> Option<(String, u16)> {
     let raw = opts.proxy.as_deref()?;
     let rest = raw
         .strip_prefix("http://")
@@ -197,7 +197,7 @@ fn proxy_parts(opts: &DownloadOpts) -> Option<(String, u16)> {
     }
 }
 
-fn has_java() -> bool {
+pub fn has_java() -> bool {
     Command::new("java")
         .arg("-version")
         .output()
@@ -269,7 +269,7 @@ pub async fn install(mc: &str, forge: &str, root: &Path, opts: &DownloadOpts) ->
     );
 
     // ③ 用我们的下载器下（有重试/续传/进度）
-    crate::download::run(&jobs, root, opts).await?;
+    crate::download::run(&jobs, root, &crate::download::batch_opts(opts)).await?;
 
     // ④ launcher_profiles.json —— **不存在才建**。那是启动器的状态文件，
     //    覆盖会毁掉用户的账号和启动配置。

@@ -9,6 +9,7 @@ pub mod download;
 pub mod fabric;
 pub mod forge;
 pub mod manifest;
+pub mod neoforge;
 pub mod pack;
 pub mod piece;
 pub mod progress;

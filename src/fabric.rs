@@ -124,7 +124,7 @@ pub async fn install(mc: &str, loader: &str, root: &Path, opts: &DownloadOpts) -
     }
 
     println!("[*] Fabric 库: {} 个", jobs.len());
-    crate::download::run(&jobs, root, opts).await?;
+    crate::download::run(&jobs, root, &crate::download::batch_opts(opts)).await?;
 
     Ok(prof.id)
 }

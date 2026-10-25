@@ -82,6 +82,21 @@ impl DownloadOpts {
     }
 }
 
+/// 批量任务的 opts：**继续下、最后汇总失败项**（仍然返回 Err）。
+///
+/// 为什么要这个：`continue_on_error = false` 时，**一个文件超时就中断整批**。
+/// 实测代价：1.21.1 原版 3983 个 asset，网络差时第 2000 多个挂掉 ⇒
+/// 其余白下 + 整批报错（`3051s` 那次）。而"全有或全无"的本意是
+/// **最终要下全**，不是**中途不许失败** —— 所以继续下、最后检查，两者都满足。
+///
+/// ⚠️ `forge` / `neoforge` 用它是安全的：失败会在 `run` 末尾 `bail`，
+/// **根本走不到 installer `--offline`**（那一步要求库全齐）。
+pub fn batch_opts(opts: &DownloadOpts) -> DownloadOpts {
+    let mut o = opts.clone();
+    o.continue_on_error = true;
+    o
+}
+
 /// 把人可读的速率格式化出来（`5M` → `5.0 MB/s`）。
 pub fn human_rate(bytes_per_sec: u64) -> String {
     let f = bytes_per_sec as f64;
