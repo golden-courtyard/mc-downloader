@@ -288,14 +288,14 @@ pub async fn install(mc: &str, forge: &str, root: &Path, opts: &DownloadOpts) ->
         );
     }
 
+    // ⚠️ **不给 installer 传代理参数**。
+    //
+    // `--offline` 的语义是"只跑 processor、不联网"，库我们已经下完了 ⇒ 它不需要代理。
+    // 而实测（2026-10-25，NeoForge 21.1.265）：**传了代理参数反而诱使它去联网**，
+    // 结果是 `SSLHandshakeException: Remote host terminated the handshake` 装不上；
+    // 不传代理，同一个 installer 65 秒跑完并 `Successfully installed client into launcher`。
+    // 代理是给【我们的下载器】用的，不是给 installer 用的 —— 两件事别混。
     let mut cmd = Command::new("java");
-    if let Some((h, p)) = proxy_parts(opts) {
-        // 实测这条能透传（installer 的 Host 解析日志里能看到全部主机被解析）
-        cmd.arg(format!("-Dhttp.proxyHost={h}"))
-            .arg(format!("-Dhttp.proxyPort={p}"))
-            .arg(format!("-Dhttps.proxyHost={h}"))
-            .arg(format!("-Dhttps.proxyPort={p}"));
-    }
     println!("[*] 跑 installer --offline（只跑 processor，不联网）");
     let out = cmd
         .arg("-jar")

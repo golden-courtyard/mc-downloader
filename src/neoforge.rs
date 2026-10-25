@@ -105,9 +105,14 @@ fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
-/// 版本目录 id：`{mc}-neoforge-{ver}`（和 Forge 的 `{mc}-forge-{ver}` 对齐）。
-pub fn version_id(mc: &str, ver: &str) -> String {
-    format!("{mc}-neoforge-{ver}")
+/// 版本目录 id：**`neoforge-{ver}`，不带 MC 前缀**。
+///
+/// ⚠️ 和 Forge 不同！Forge 是 `{mc}-forge-{ver}`（如 `1.20.1-forge-47.4.10`），
+/// 而 NeoForge installer **实测生成的是 `neoforge-21.1.265`**（2026-10-25 实捕）。
+/// 一开始照抄了 Forge 的格式 ⇒ 产物明明生成了、验产物那步却报"不存在"。
+/// 版本号本身已隐含 MC 版本（`21.1.x` ↔ 1.21.1），不需要前缀。
+pub fn version_id(ver: &str) -> String {
+    format!("neoforge-{ver}")
 }
 
 /// 查该 MC 版本最新的 NeoForge（不指定版本时用）。
@@ -131,7 +136,17 @@ pub async fn latest(mc: &str, opts: &DownloadOpts) -> Result<String> {
 /// 流程和 `forge::install` 一致：下 installer → 读两个 json → 我们下 libraries
 /// → 建 launcher_profiles → 跑 installer `--offline` → 验产物。
 pub async fn install(mc: &str, ver: &str, root: &Path, opts: &DownloadOpts) -> Result<String> {
-    let id = version_id(mc, ver);
+    // 校验版本与 MC 匹配 —— 防的是「mc = 1.21.1 却写 loader = "neoforge:20.2.92"」这种配错。
+    // 不校验的话，installer 会照装一个属于别的 MC 版本的 NeoForge，目录名对得上、启动才崩。
+    let expect = format!("{}.", neo_prefix(mc));
+    if !ver.starts_with(&expect) {
+        bail!(
+            "NeoForge {ver} 不属于 MC {mc}（该 MC 的版本应以 `{expect}` 开头）\n\
+             \x20 不确定写什么就省略版本：`loader = \"neoforge\"`，会自动查该 MC 的最新版"
+        );
+    }
+
+    let id = version_id(ver);
     let client = download::client(opts)?;
 
     // ① 下 installer jar
@@ -206,13 +221,9 @@ pub async fn install(mc: &str, ver: &str, root: &Path, opts: &DownloadOpts) -> R
         );
     }
 
+    // ⚠️ 不给 installer 传代理参数（理由见 forge.rs 同一处的长注释）。
+    // 实测：传了会导致 `SSLHandshakeException` 装不上；不传则 65 秒成功。
     let mut cmd = Command::new("java");
-    if let Some((h, p)) = crate::forge::proxy_parts(opts) {
-        cmd.arg(format!("-Dhttp.proxyHost={h}"))
-            .arg(format!("-Dhttp.proxyPort={p}"))
-            .arg(format!("-Dhttps.proxyHost={h}"))
-            .arg(format!("-Dhttps.proxyPort={p}"));
-    }
     println!("[*] 跑 installer --offline（只跑 processor，不联网）");
     let out = cmd
         .arg("-jar")
@@ -336,7 +347,24 @@ mod tests {
     }
 
     #[test]
-    fn version_id_matches_forge_convention() {
-        assert_eq!(version_id("1.21.1", "21.1.264"), "1.21.1-neoforge-21.1.264");
+    fn install_rejects_version_from_other_mc() {
+        // 用 pick_latest 的同类判据：20.2.92 属于 MC 1.20.2，不该给 1.21.1 用
+        let expect_21 = format!("{}.", neo_prefix("1.21.1"));
+        assert!(
+            !("20.2.92".starts_with(&expect_21)),
+            "20.2.92 不该通过 1.21.1 的前缀校验"
+        );
+        let expect_26 = format!("{}.", neo_prefix("26.3"));
+        assert!("26.3.0.98".starts_with(&expect_26), "26.3.0.98 属于 26.3");
+    }
+
+    #[test]
+    fn version_id_has_no_mc_prefix() {
+        // 实测 NeoForge installer 生成的是 neoforge-21.1.265（不带 1.21.1- 前缀）
+        assert_eq!(version_id("21.1.265"), "neoforge-21.1.265");
+        assert!(
+            !version_id("21.1.265").starts_with("1.21"),
+            "不能照抄 Forge 的 {{mc}}-forge-{{ver}} 格式"
+        );
     }
 }
