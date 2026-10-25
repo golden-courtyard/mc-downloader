@@ -1,0 +1,39 @@
+#!/bin/sh
+# mc-downloader 的 pre-commit 门
+#
+# 只做一件事：暂存里有 .rs 时，跑 `cargo fmt --all --check`。
+#
+# 为什么要这道门（2026-10-25 立）：
+#   CI 第 3 步就是 `cargo fmt --all --check`，而从 P0/P1 起我改代码的方式是
+#   「脚本往 .rs 里插 → 编译 → 测试 → 提交」，中间从没跑过 fmt
+#   ⇒ CI 连红 5 次，我一次都没发现（因为每次只确认 git log / status / push）。
+#   ⇒ 靠"记得跑"不可靠，用门。
+#
+# 为什么不在这里跑 clippy / test：
+#   `cargo fmt --check` 只读源码、不编译（秒级）；clippy 和 test 要编译（分钟级），
+#   放进来会让每次提交都卡住。CI 里那两步照旧。
+#
+# 判据：暂存里**有** .rs（新增/修改/复制）才查，纯文档提交不触发。
+
+set -e
+
+STAGED_RS=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.rs$' || true)
+
+if [ -z "$STAGED_RS" ]; then
+    exit 0
+fi
+
+if ! cargo fmt --all --check > /dev/null 2>&1; then
+    echo ""
+    echo "[pre-commit] ✗ cargo fmt 未通过（本次暂存改了 .rs）"
+    echo ""
+    # 只显示前 20 行差异，避免刷屏
+    cargo fmt --all --check 2>&1 | head -20
+    echo ""
+    echo "  修法：cargo fmt --all"
+    echo "  然后重新 git add"
+    echo ""
+    exit 1
+fi
+
+echo "[pre-commit] rustfmt OK"
