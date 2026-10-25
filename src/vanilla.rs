@@ -21,5 +21,5 @@ pub async fn install(mc: &str, root: &Path, opts: &DownloadOpts) -> Result<()> {
     let jobs = crate::version::collect(&client, &vj).await?;
     println!("[*] 待下载: {} 个文件", jobs.len());
 
-    crate::download::run(&jobs, root, opts).await
+    crate::download::run(&jobs, root, &crate::download::batch_opts(opts)).await
 }

@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use mc_downloader::download::DownloadOpts;
-use mc_downloader::{config, download, fabric, forge, pack, progress, url_list, vanilla, version};
+use mc_downloader::{
+    config, download, fabric, forge, neoforge, pack, progress, url_list, vanilla, version,
+};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -355,8 +357,17 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
                         };
                         forge::install(version, &fv, root, opts).await?
                     }
+                    // NeoForge：同一个思路（下载归我们、构建归官方 installer），
+                    // 但 installer URL 与版本映射都不同（见 neoforge.rs 文件头）
+                    "neoforge" => {
+                        let nv = match want_ver {
+                            Some(v) if !v.is_empty() => v,
+                            _ => neoforge::latest(version, opts).await?,
+                        };
+                        neoforge::install(version, &nv, root, opts).await?
+                    }
                     other => anyhow::bail!(
-                        "未知的 loader: \"{other}\"（支持：fabric / forge；NeoForge 尚未实现）"
+                        "未知的 loader: \"{other}\"（支持：fabric / forge / neoforge）"
                     ),
                 };
                 println!("[+] 加载器装好 -> versions/{id}/");
@@ -403,9 +414,7 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
                     })
                     .collect();
                 // 批量独立文件：一个挂了不该拖累其余
-                let mut batch = opts.clone();
-                batch.continue_on_error = true;
-                download::run(&jobs, root, &batch).await?;
+                download::run(&jobs, root, &download::batch_opts(opts)).await?;
             } else {
                 let url = url.as_ref().expect("校验已保证 url 或 urls_file 有一个");
                 println!("[generic] {url}");

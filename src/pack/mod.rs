@@ -59,7 +59,7 @@ pub async fn install(pack: &Path, root: &Path, opts: &DownloadOpts) -> Result<()
             mirrors: Vec::new(),
         })
         .collect();
-    crate::download::run(&jobs, &inst, opts).await?;
+    crate::download::run(&jobs, &inst, &crate::download::batch_opts(opts)).await?;
 
     // ⑥ 覆盖层：解压可能很重，扔到 blocking 线程池，别占着 async worker
     let prefixes = spec.override_prefixes.clone();
@@ -167,7 +167,7 @@ async fn install_curseforge(
         })
         .collect();
     // ★ 完全复用现有下载器，不新写任何下载逻辑
-    crate::download::run(&jobs, root, opts).await?;
+    crate::download::run(&jobs, root, &crate::download::batch_opts(opts)).await?;
 
     // 覆盖层：CF 的 `overrides` 值实测都是 "overrides"
     let prefixes = vec!["overrides/".to_string()];
