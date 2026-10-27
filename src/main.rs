@@ -74,7 +74,10 @@ enum Cmd {
         /// 目标目录
         #[arg(short, long, default_value = ".")]
         dir: PathBuf,
-        /// 已知大小（可选）
+        /// 已知大小（可选）—— **只影响"分片还是单流"，不影响能否下载**
+        ///
+        /// 不给时会先发 HEAD 探测；**探测不到（如服务器用 `Transfer-Encoding: chunked`）就走单流**，
+        /// 照常下到 EOF，只是没法分片（大文件会慢一些）。
         #[arg(short, long)]
         size: Option<u64>,
         /// 落地文件名
@@ -250,26 +253,28 @@ async fn main() -> Result<()> {
             mirrors,
         } => {
             let client = download::client(&cli)?;
+            // 长度只用来决定「分片还是单流」，**不是下载的前提**。
+            // 拿不到（chunked 传输、HEAD 不给长度）=> size=None => one_stream 流式写到 EOF。
             let size = match size {
-                Some(s) => s,
+                Some(s) => Some(s),
                 None => {
                     let resp = client.head(&url).send().await?;
-                    download::header_content_length(&resp).ok_or_else(|| {
-                        anyhow::anyhow!("服务器未返回 Content-Length，请用 --size 指定")
-                    })?
+                    download::header_content_length(&resp)
                 }
             };
             println!("[*] URL  : {url}");
-            println!(
-                "[*] 大小 : {size} bytes ({:.1} MB)",
-                size as f64 / 1048576.0
-            );
+            match size {
+                Some(n) => println!("[*] 大小 : {n} bytes ({:.1} MB)", n as f64 / 1048576.0),
+                None => println!(
+                    "[*] 大小 : 未知（服务器未给 Content-Length，如 chunked）=> 单流下载，不分片"
+                ),
+            }
             println!("[*] 网络 : {net}");
             let job = version::Job {
                 url,
                 path: name,
                 sha1: None,
-                size: Some(size),
+                size,
                 mirrors,
             };
             download::run(&[job], &dir, &cli).await?;
@@ -419,13 +424,12 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
                 let url = url.as_ref().expect("校验已保证 url 或 urls_file 有一个");
                 println!("[generic] {url}");
                 let client = download::client(opts)?;
+                // 同 fetch：长度只决定分片与否；没有就走单流（chunked 也没问题）
                 let size = match size {
-                    Some(s) => *s,
+                    Some(s) => Some(*s),
                     None => {
                         let resp = client.head(url).send().await?;
-                        download::header_content_length(&resp).ok_or_else(|| {
-                            anyhow::anyhow!("服务器未返回 Content-Length，请在脚本里显式给 size")
-                        })?
+                        download::header_content_length(&resp)
                     }
                 };
                 let name = name.clone().unwrap_or_else(|| {
@@ -435,7 +439,7 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
                     url: url.clone(),
                     path: name,
                     sha1: None,
-                    size: Some(size),
+                    size,
                     mirrors: mirrors.clone(),
                 };
                 download::run(&[job], root, opts).await?;
