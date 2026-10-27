@@ -11,7 +11,7 @@ pub mod fetch;
 pub mod pack;
 pub mod probe;
 // run 的 189 行单独一批（含 run_one_task），搬完再启用
-// pub mod run;
+pub mod run;
 pub mod vanilla;
 
 use mc_downloader::download::DownloadOpts;
