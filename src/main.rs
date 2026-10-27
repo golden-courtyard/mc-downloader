@@ -1,6 +1,7 @@
+mod commands;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use futures::StreamExt;
 use mc_downloader::download::DownloadOpts;
 use mc_downloader::{
     config, download, fabric, forge, neoforge, pack, progress, url_list, vanilla, version,
@@ -114,39 +115,6 @@ enum Cmd {
 
 /// 探测单个 URL：读 `secs` 秒，返回读到的字节数。
 ///
-/// **不要求服务器支持 Range** —— 直接 GET 读一段时间就断，最简单也最通用。
-/// 多给 5 秒余量给建连（慢源建连可能就花掉 2-3 秒）。
-async fn probe_one(client: &reqwest::Client, url: &str, secs: u64) -> Result<u64> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
-    let fut = async {
-        let resp = client.get(url).send().await?.error_for_status()?;
-        let mut stream = resp.bytes_stream();
-        let mut total = 0u64;
-        while let Some(c) = stream.next().await {
-            total += c?.len() as u64;
-            if std::time::Instant::now() >= deadline {
-                break;
-            }
-        }
-        Ok::<u64, anyhow::Error>(total)
-    };
-    match tokio::time::timeout(std::time::Duration::from_secs(secs + 5), fut).await {
-        Ok(r) => r,
-        Err(_) => anyhow::bail!("探测超时（{secs}s + 5s 余量）"),
-    }
-}
-
-fn rate_str(bytes: u64, secs: u64) -> String {
-    format!("{}/s", download::human_rate(bytes / secs.max(1)))
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_string()
-    } else {
-        format!("{}…", s.chars().take(n).collect::<String>())
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -173,14 +141,15 @@ async fn main() -> Result<()> {
         max_speed: cli_max_speed,
     };
     let net = cli.proxy.as_deref().unwrap_or("直连");
+    // 给拆出去的子命令用：opts 是行为、net 是文案（同一个来源，分开存）
+    let ctx = commands::Ctx {
+        opts: cli.clone(),
+        net: net.to_string(),
+    };
 
     match args.cmd {
         Cmd::Vanilla { version, dir } => {
-            println!("[*] 目标版本 : {version}");
-            println!("[*] 输出目录 : {}", dir.display());
-            println!("[*] 网络     : {net}");
-            vanilla::install(&version, &dir, &cli).await?;
-            println!("[+] 完成。用 PCL「添加游戏目录」指向该目录即可。");
+            commands::vanilla::run(version, dir, &ctx).await?;
         }
         Cmd::Run { script, parallel } => {
             let cfg = config::Config::load(&script)?;
@@ -256,77 +225,13 @@ async fn main() -> Result<()> {
             name,
             mirrors,
         } => {
-            let client = download::client(&cli)?;
-            // 长度只用来决定「分片还是单流」，**不是下载的前提**。
-            // 拿不到（chunked 传输、HEAD 不给长度）=> size=None => one_stream 流式写到 EOF。
-            let size = match size {
-                Some(s) => Some(s),
-                None => {
-                    let resp = client.head(&url).send().await?;
-                    download::header_content_length(&resp)
-                }
-            };
-            println!("[*] URL  : {url}");
-            match size {
-                Some(n) => println!("[*] 大小 : {n} bytes ({:.1} MB)", n as f64 / 1048576.0),
-                None => println!(
-                    "[*] 大小 : 未知（服务器未给 Content-Length，如 chunked）=> 单流下载，不分片"
-                ),
-            }
-            println!("[*] 网络 : {net}");
-            let job = version::Job {
-                url,
-                path: name,
-                sha1: None,
-                size,
-                mirrors,
-            };
-            download::run(&[job], &dir, &cli).await?;
-            println!("[+] 完成 -> {}", dir.display());
+            commands::fetch::run(url, dir, size, name, mirrors, &ctx).await?;
         }
         Cmd::Probe { urls, seconds } => {
-            if urls.len() < 2 {
-                anyhow::bail!(
-                    "probe 至少给两个 URL 才有意义（现在 {} 个）\n  \
-                     用法：mc-downloader probe <url1> <url2> [--seconds 5]",
-                    urls.len()
-                );
-            }
-            let secs = seconds.clamp(2, 60);
-            println!("[*] 探测 {secs} 秒/个（串行，避免互相抢带宽）");
-            let client = download::client(&cli)?;
-            let mut results: Vec<(String, Option<u64>)> = Vec::new();
-            for (i, u) in urls.iter().enumerate() {
-                print!("  [{}/{}] {} ... ", i + 1, urls.len(), truncate(u, 58));
-                match probe_one(&client, u, secs).await {
-                    Ok(n) => {
-                        println!("{}", rate_str(n, secs));
-                        results.push((u.clone(), Some(n)));
-                    }
-                    Err(e) => {
-                        println!("失败: {e}");
-                        results.push((u.clone(), None));
-                    }
-                }
-            }
-            // 按吞吐降序，失败的排最后
-            results.sort_by_key(|x| std::cmp::Reverse(x.1.unwrap_or(0)));
-            println!("\n[*] 排名:");
-            for (i, (u, n)) in results.iter().enumerate() {
-                let r = match n {
-                    Some(v) => rate_str(*v, secs),
-                    None => "失败".to_string(),
-                };
-                println!("  {}. {:>12}  {u}", i + 1, r);
-            }
-            println!(
-                "\n[i] 把快的填进 `mirrors = [\"...\"]`；下载时 SourcePool 会按实测吞吐分配分片"
-            );
+            commands::probe::run(urls, seconds, &ctx).await?;
         }
         Cmd::Pack { file, dir } => {
-            println!("[*] 输出目录 : {}", dir.display());
-            println!("[*] 网络     : {net}");
-            pack::install(&file, &dir, &cli).await?;
+            commands::pack::run(file, dir, &ctx).await?;
         }
     }
     Ok(())
