@@ -356,7 +356,7 @@ async fn one_split(
     opts: &DownloadOpts,
     pg: &Arc<Progress>,
 ) -> Result<()> {
-    let mut table = PieceTable::new(size);
+    let mut table = PieceTable::with_conns(size, opts.piece_conns);
     if !table.is_split() {
         return one_stream(client, job, dst, pg).await;
     }
@@ -438,6 +438,12 @@ async fn one_split(
     let table = Arc::new(tokio::sync::Mutex::new(table));
 
     let conns = opts.piece_conns.min(n_pieces).max(1);
+    // 关键观测点：片数由 `PieceTable::with_conns` 按 size/conns 算，夹逼后仍可能少于 conns
+    // （小文件受 MIN_PIECE 限制）。这里如实打印"实际并发"，别让用户以为配了 32 就真开了 32。
+    println!(
+        "[*] 分片：{n_pieces} 片 · 实际并发 {conns}（配置 {}；片大小 {piece_size} 字节）",
+        opts.piece_conns
+    );
     // 自适应模式：worker 数按上限开，实际并发由 Semaphore 控制
     let workers = if opts.adaptive {
         (conns * 2).min(n_pieces).max(1)

@@ -8,12 +8,13 @@ use std::path::{Path, PathBuf};
 
 /// 小文件阈值：低于此值不分片（握手开销 > 收益）
 const NO_SPLIT_BELOW: u64 = 8 * 1024 * 1024; // 8 MB
-/// 中等文件分片大小
-const PIECE_MID: u64 = 4 * 1024 * 1024; // 4 MB
-/// 大文件分片大小
-const PIECE_LARGE: u64 = 16 * 1024 * 1024; // 16 MB
-/// 进入大文件分片的阈值
-const LARGE_ABOVE: u64 = 256 * 1024 * 1024; // 256 MB
+/// 片大小下限：再小的话，每片的 TCP+TLS 握手开销摊不平
+const MIN_PIECE: u64 = 1024 * 1024; // 1 MB
+/// 片大小上限：与旧的 PIECE_LARGE 对齐，保持大文件行为不变
+const MAX_PIECE: u64 = 16 * 1024 * 1024; // 16 MB
+/// 默认并发数（与 `download::DEFAULT_PIECE_CONNS` 同值；此处独立定义，
+/// 免得 piece.rs 反向依赖 download.rs）
+const DEFAULT_CONNS: usize = 4;
 
 #[derive(Debug, Clone)]
 pub struct PieceTable {
@@ -25,14 +26,27 @@ pub struct PieceTable {
 }
 
 impl PieceTable {
+    /// 默认并发（4）切分 —— 给单测与"不知道并发数"的调用方用。
     pub fn new(file_size: u64) -> Self {
+        Self::with_conns(file_size, DEFAULT_CONNS)
+    }
+
+    /// 按目标并发数切分：**让片数 ≥ conns**，使每个连接都有活干。
+    ///
+    /// 旧实现是"先按文件大小切死（4 MB / 16 MB），再看片数够不够"，
+    /// 结果 `download.rs` 里的 `min(piece_conns, n_pieces)` 会让片数成为并发上限的
+    /// 隐性天花板：**256 MB 的文件只有 16 片，配 32 连接也只有 16 个在用**。
+    ///
+    /// 现在把因果反过来：**先知道要几个连接，再决定片多大**。
+    /// 夹逼 [MIN_PIECE, MAX_PIECE] 是因为两头都有代价 ——
+    /// 片太小则每片的握手开销占比过高，片太大则并发用不满。
+    pub fn with_conns(file_size: u64, conns: usize) -> Self {
         let piece_size = if file_size < NO_SPLIT_BELOW {
             // 不分片：一片覆盖整个文件
             file_size.max(1)
-        } else if file_size <= LARGE_ABOVE {
-            PIECE_MID
         } else {
-            PIECE_LARGE
+            let target = conns.max(1) as u64;
+            (file_size / target).clamp(MIN_PIECE, MAX_PIECE)
         };
 
         let total = file_size.div_ceil(piece_size).max(1) as u32;
@@ -227,11 +241,12 @@ mod tests {
     }
 
     #[test]
-    fn medium_file_uses_4m_pieces() {
-        // 10 MB -> 4MB 分片 -> 3 片
+    fn medium_file_splits_by_conns() {
+        // 新契约：片大小 = size / conns（夹逼 [1MB, 16MB]），目的是让片数 >= conns
+        // 10 MB / 4 连接 = 2.5 MB 一片 -> 4 片
         let t = PieceTable::new(10 * 1024 * 1024);
-        assert_eq!(t.piece_size(), PIECE_MID);
-        assert_eq!(t.total(), 3);
+        assert_eq!(t.piece_size(), 10 * 1024 * 1024 / 4);
+        assert_eq!(t.total(), 4);
         assert!(t.is_split());
     }
 
@@ -240,7 +255,8 @@ mod tests {
         // 10 GB / 16MB = 640 片
         let size = 10u64 * 1024 * 1024 * 1024;
         let t = PieceTable::new(size);
-        assert_eq!(t.piece_size(), PIECE_LARGE);
+        // 10GB/4 = 2.5GB，被 MAX_PIECE 夹到 16MB -> 仍 640 片（与旧行为一致）
+        assert_eq!(t.piece_size(), MAX_PIECE);
         assert_eq!(t.total(), 640);
     }
 
@@ -263,10 +279,20 @@ mod tests {
 
     #[test]
     fn last_piece_is_truncated() {
-        // 9 MB -> 4+4+1
-        let t = PieceTable::new(9 * 1024 * 1024);
-        let (s, e) = t.range(t.total() - 1).unwrap();
-        assert_eq!(e - s, 1024 * 1024, "最后一片应只有 1MB");
+        // 用"除不尽"的组合：10MB / 3 连接 = 3.33MB 片 -> 4 片，最后一片比片大小短。
+        // **不再硬编码具体字节数**（片大小现在是 size/conns 算出来的）
+        let size = 10 * 1024 * 1024;
+        let t = PieceTable::with_conns(size, 3);
+        let ps = t.piece_size();
+        let (s0, e0) = t.range(t.total() - 1).unwrap();
+        assert!(
+            e0 - s0 < ps,
+            "最后一片应短于片大小（末片 {} 字节 < {}）",
+            e0 - s0,
+            ps
+        );
+        assert_eq!(e0, size, "最后一片的 end 必须等于文件大小");
+        assert_eq!(s0, ps * (t.total() as u64 - 1));
     }
 
     #[test]
@@ -285,9 +311,10 @@ mod tests {
 
     #[test]
     fn all_done_at_exact_word_boundary() {
-        // 64 片整（256 MB / 4MB），验证 bitmap[full] 不越界
+        // bitmap 按 64 bit/word 分配；用"片数恰好落在 word 内"的尺寸验不越界。
+        // 256MB / 4 连接 = 64MB，被 MAX_PIECE 夹到 16MB -> 16 片（1 word 足够）
         let t = PieceTable::new(256 * 1024 * 1024);
-        assert_eq!(t.total(), 64);
+        assert_eq!(t.total(), 16);
         assert!(!t.all_done());
     }
 
@@ -301,19 +328,45 @@ mod tests {
     }
 
     #[test]
+    fn piece_count_meets_conn_target() {
+        // **这是本次改动的契约**：片大小 = size/conns（夹逼 [1MB,16MB]），
+        // 目的是让片数 >= 目标连接数 —— 否则 download.rs 的
+        // `min(piece_conns, n_pieces)` 会让片数成为并发的隐性天花板。
+        for (size_mb, conns) in [(100u64, 32usize), (256, 32), (1024, 32), (100, 8)] {
+            let t = PieceTable::with_conns(size_mb * 1024 * 1024, conns);
+            assert!(
+                t.total() as usize >= conns,
+                "{size_mb}MB / {conns} 连接 => 只有 {} 片（片大小 {} 字节）",
+                t.total(),
+                t.piece_size()
+            );
+        }
+    }
+
+    #[test]
+    fn piece_size_is_clamped_both_ends() {
+        // 下限：小文件配 32 连接，片不会小于 1MB（否则握手开销吃掉收益）
+        let t = PieceTable::with_conns(16 * 1024 * 1024, 32);
+        assert_eq!(t.piece_size(), MIN_PIECE);
+        // 上限：超大文件配 4 连接，片不会大于 16MB
+        let t2 = PieceTable::with_conns(10 * 1024 * 1024 * 1024, 4);
+        assert_eq!(t2.piece_size(), MAX_PIECE);
+    }
+
+    #[test]
     fn state_roundtrip_restores_bitmap() {
         let part = tmp_part("rt");
-        let mut t = PieceTable::new(10 * 1024 * 1024); // 3 片
+        let mut t = PieceTable::new(10 * 1024 * 1024); // 4 片（size/conns=2.5MB）
         t.mark_done(0);
         t.mark_done(2);
         PieceState::save(&part, &t).expect("save 应当成功");
 
         let back = PieceState::load(&part, 10 * 1024 * 1024).expect("load 应当成功");
-        assert_eq!(back.total(), 3);
+        assert_eq!(back.total(), 4);
         assert!(back.is_done(0));
         assert!(!back.is_done(1));
         assert!(back.is_done(2));
-        assert_eq!(back.pending(), vec![1]);
+        assert_eq!(back.pending(), vec![1, 3]);
         PieceState::remove(&part);
     }
 
@@ -357,14 +410,20 @@ mod tests {
 
     #[test]
     fn done_bytes_matches_completed_ranges() {
-        let mut t = PieceTable::new(9 * 1024 * 1024); // 4+4+1
+        let size = 10 * 1024 * 1024;
+        let mut t = PieceTable::with_conns(size, 3); // 末片比片大小短
+        let ps = t.piece_size();
+        let last_len = size - ps * (t.total() as u64 - 1);
+
         assert_eq!(t.done_bytes(), 0);
         t.mark_done(0);
-        assert_eq!(t.done_bytes(), 4 * 1024 * 1024);
-        t.mark_done(2); // 最后一片只有 1MB
-        assert_eq!(t.done_bytes(), 5 * 1024 * 1024);
-        t.mark_done(1);
-        assert_eq!(t.done_bytes(), 9 * 1024 * 1024);
+        assert_eq!(t.done_bytes(), ps);
+        t.mark_done(t.total() - 1); // 最后一片短一截
+        assert_eq!(t.done_bytes(), ps + last_len);
+        for i in 1..t.total() - 1 {
+            t.mark_done(i);
+        }
+        assert_eq!(t.done_bytes(), size, "全标完后应正好等于文件大小");
     }
 
     #[test]
