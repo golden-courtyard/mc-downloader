@@ -71,7 +71,7 @@
 | **1.20.1 + Forge 47.4.10 → 实际启动** | ✅ **用户用 PCL 实测，可进入游戏** |
 | **1.20.1 + Fabric 0.19.5 → 实际启动** | ✅ **用户用 PCL 实测，可进入游戏** |
 | CurseForge 整合包 188 个 mod 对账 | ✅ 三个包全都对得上（`mods/` + `manual.txt` = manifest 条数）|
-| **NeoForge** | ⚠️ **代码完成，未真机验证** —— 3 次尝试都卡在下载阶段（`maven.neoforged.net` TLS 建连失败），从未走到装配 |
+| **NeoForge 21.1.265（MC 1.21.1）** | ✅ **真机通过（2026-10-27）** —— `EXIT=0`·210s·`mainClass = cpw.mods.bootstraplauncher.BootstrapLauncher`·产物 `versions/neoforge-21.1.265/`。此前卡在下载阶段是**网络**，装配阶段还暴露过三处代码 bug（已修，见 `2f6d09d`）|
 
 > ⚠️ 这张表**区分「结构对」和「真的能跑」**。只有标「实测」的那条是人工确认过的；
 > 其余是文件级比对 —— **结构一致不等于能启动**。

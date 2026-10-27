@@ -162,7 +162,14 @@ impl Progress {
         let speed = done as f64 / secs;
 
         if total == 0 {
-            return Some(format!("[ {} ]  {}/s", human(done), rate(speed)));
+            // 总长未知（如 `Transfer-Encoding: chunked`）。
+            // ⚠️ 不能只写 `[ 7.2 MB ]` —— 那会被读成"总共才 7.2 MB"，
+            // 看起来像卡住了（2026-10-27 实测时的误读）。必须把"未知"说出来。
+            return Some(format!(
+                "[ 已下载 {} · 总长未知 ]  {}/s",
+                human(done),
+                rate(speed)
+            ));
         }
         if done >= total {
             return Some(format!("[ {} / {} ]  完成", human(total), human(total)));
@@ -296,5 +303,19 @@ mod tests {
         let p = Progress::new(0);
         p.add(4096);
         assert_eq!(p.done(), 4096);
+
+        // 措辞判据：必须出现「总长未知」，且**不能**出现 "/" 那样像"7.2/7.2"的分式
+        // （line() 在秒数 <0.2 时返回 None，这里用循环等到它可读）
+        let mut line = None;
+        for _ in 0..40 {
+            if let Some(l) = p.line() {
+                line = Some(l);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let l = line.expect("0.4 秒内应该有可读的进度行");
+        assert!(l.contains("总长未知"), "要明确说出未知: {l}");
+        assert!(!l.contains(" / "), "不能出现分式（会被读成 7.2/7.2）: {l}");
     }
 }
