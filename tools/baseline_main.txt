@@ -1,0 +1,271 @@
+### --help
+从 Mojang 官方 CDN 下载 Minecraft，或安装整合包
+
+Usage: mc-downloader.exe [OPTIONS] <COMMAND>
+
+Commands:
+  vanilla  下载原版（client jar + libraries + assets）
+  run      按下载脚本执行（脚本里可以有多个 [[task]]）
+  fetch    下载单个 URL 到目录（分片 + 续传 + 重试 + 限速；长度未知时自动单流）
+  probe    探测多个 URL 的真实下载速度（串行各测 N 秒），用来决定 mirrors 填哪个
+  pack     安装整合包（.mrpack，或结构相同的 .zip）
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --proxy <PROXY>
+          代理地址，例如 http://127.0.0.1:7897
+          
+          默认**直连**：Mojang CDN / Fabric meta / Modrinth CDN 在国内均直连可达。 只有直连拿不到（超时 / 000）时才加这个参数。
+
+      --retry <RETRY>
+          单个文件失败后的重试次数（指数退避 1s/2s/4s…）
+
+      --concurrency <CONCURRENCY>
+          同时下载的文件数（默认 16）
+
+      --piece-conns <PIECE_CONNS>
+          单文件分片时的并发连接数（默认 4）
+
+      --adaptive <ADAPTIVE>
+          自适应连接数（AIMD：快则 +1，慢则减半；worker 上限为 2×piece-conns）
+          
+          [possible values: true, false]
+
+      --timeout <TIMEOUT>
+          建连超时与单次读超时（秒，默认 30）。不是整请求总时限
+
+      --max-speed <MAX_SPEED>
+          全局总带宽上限，如 `5M` / `500K`（1024 进制；纯数字 = 字节/秒）
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+### vanilla --help
+下载原版（client jar + libraries + assets）
+
+Usage: mc-downloader.exe vanilla [OPTIONS] <VERSION>
+
+Arguments:
+  <VERSION>
+          版本 id，例如 1.20.1 / 26.3
+
+Options:
+  -d, --dir <DIR>
+          目标 .minecraft 目录
+          
+          [default: .]
+
+      --proxy <PROXY>
+          代理地址，例如 http://127.0.0.1:7897
+          
+          默认**直连**：Mojang CDN / Fabric meta / Modrinth CDN 在国内均直连可达。 只有直连拿不到（超时 / 000）时才加这个参数。
+
+      --retry <RETRY>
+          单个文件失败后的重试次数（指数退避 1s/2s/4s…）
+
+      --concurrency <CONCURRENCY>
+          同时下载的文件数（默认 16）
+
+      --piece-conns <PIECE_CONNS>
+          单文件分片时的并发连接数（默认 4）
+
+      --adaptive <ADAPTIVE>
+          自适应连接数（AIMD：快则 +1，慢则减半；worker 上限为 2×piece-conns）
+          
+          [possible values: true, false]
+
+      --timeout <TIMEOUT>
+          建连超时与单次读超时（秒，默认 30）。不是整请求总时限
+
+      --max-speed <MAX_SPEED>
+          全局总带宽上限，如 `5M` / `500K`（1024 进制；纯数字 = 字节/秒）
+
+  -h, --help
+          Print help (see a summary with '-h')
+### run --help
+按下载脚本执行（脚本里可以有多个 [[task]]）
+
+Usage: mc-downloader.exe run [OPTIONS] <SCRIPT>
+
+Arguments:
+  <SCRIPT>
+          脚本路径（TOML）
+
+Options:
+      --parallel
+          任务并行执行（默认串行）
+
+      --proxy <PROXY>
+          代理地址，例如 http://127.0.0.1:7897
+          
+          默认**直连**：Mojang CDN / Fabric meta / Modrinth CDN 在国内均直连可达。 只有直连拿不到（超时 / 000）时才加这个参数。
+
+      --retry <RETRY>
+          单个文件失败后的重试次数（指数退避 1s/2s/4s…）
+
+      --concurrency <CONCURRENCY>
+          同时下载的文件数（默认 16）
+
+      --piece-conns <PIECE_CONNS>
+          单文件分片时的并发连接数（默认 4）
+
+      --adaptive <ADAPTIVE>
+          自适应连接数（AIMD：快则 +1，慢则减半；worker 上限为 2×piece-conns）
+          
+          [possible values: true, false]
+
+      --timeout <TIMEOUT>
+          建连超时与单次读超时（秒，默认 30）。不是整请求总时限
+
+      --max-speed <MAX_SPEED>
+          全局总带宽上限，如 `5M` / `500K`（1024 进制；纯数字 = 字节/秒）
+
+  -h, --help
+          Print help (see a summary with '-h')
+### fetch --help
+下载单个 URL 到目录（分片 + 续传 + 重试 + 限速；长度未知时自动单流）
+
+这是「下一个文件」的默认入口，比裸 curl 多做四件事：大文件自动分片并行、 断点续传、失败指数退避重试、可限速。服务器不给 Content-Length（如 chunked）时 不再报错，自动退化为单流下到 EOF（只是没法分片，会慢一些）。
+
+Usage: mc-downloader.exe fetch [OPTIONS] <URL>
+
+Arguments:
+  <URL>
+          完整 URL
+
+Options:
+  -d, --dir <DIR>
+          目标目录
+          
+          [default: .]
+
+      --proxy <PROXY>
+          代理地址，例如 http://127.0.0.1:7897
+          
+          默认**直连**：Mojang CDN / Fabric meta / Modrinth CDN 在国内均直连可达。 只有直连拿不到（超时 / 000）时才加这个参数。
+
+      --retry <RETRY>
+          单个文件失败后的重试次数（指数退避 1s/2s/4s…）
+
+  -s, --size <SIZE>
+          已知大小（可选）—— **只影响"分片还是单流"，不影响能否下载**
+          
+          不给时会先发 HEAD 探测；**探测不到（如服务器用 `Transfer-Encoding: chunked`）就走单流**， 照常下到 EOF，只是没法分片（大文件会慢一些）。
+
+      --concurrency <CONCURRENCY>
+          同时下载的文件数（默认 16）
+
+  -n, --name <NAME>
+          落地文件名
+          
+          [default: out.bin]
+
+      --mirror <MIRRORS>
+          额外镜像 URL（可重复，内容须与 url 相同）
+
+      --piece-conns <PIECE_CONNS>
+          单文件分片时的并发连接数（默认 4）
+
+      --adaptive <ADAPTIVE>
+          自适应连接数（AIMD：快则 +1，慢则减半；worker 上限为 2×piece-conns）
+          
+          [possible values: true, false]
+
+      --timeout <TIMEOUT>
+          建连超时与单次读超时（秒，默认 30）。不是整请求总时限
+
+      --max-speed <MAX_SPEED>
+          全局总带宽上限，如 `5M` / `500K`（1024 进制；纯数字 = 字节/秒）
+
+  -h, --help
+          Print help (see a summary with '-h')
+### probe --help
+探测多个 URL 的真实下载速度（串行各测 N 秒），用来决定 mirrors 填哪个
+
+**为什么不并发测**：并发会互相抢带宽，测出来的排名是假的。 串行慢一点，但每个数都是真的。
+
+Usage: mc-downloader.exe probe [OPTIONS] [URLS]...
+
+Arguments:
+  [URLS]...
+          要对比的 URL（至少两个才有意义）
+
+Options:
+      --proxy <PROXY>
+          代理地址，例如 http://127.0.0.1:7897
+          
+          默认**直连**：Mojang CDN / Fabric meta / Modrinth CDN 在国内均直连可达。 只有直连拿不到（超时 / 000）时才加这个参数。
+
+      --seconds <SECONDS>
+          每个 URL 测几秒
+          
+          [default: 5]
+
+      --retry <RETRY>
+          单个文件失败后的重试次数（指数退避 1s/2s/4s…）
+
+      --concurrency <CONCURRENCY>
+          同时下载的文件数（默认 16）
+
+      --piece-conns <PIECE_CONNS>
+          单文件分片时的并发连接数（默认 4）
+
+      --adaptive <ADAPTIVE>
+          自适应连接数（AIMD：快则 +1，慢则减半；worker 上限为 2×piece-conns）
+          
+          [possible values: true, false]
+
+      --timeout <TIMEOUT>
+          建连超时与单次读超时（秒，默认 30）。不是整请求总时限
+
+      --max-speed <MAX_SPEED>
+          全局总带宽上限，如 `5M` / `500K`（1024 进制；纯数字 = 字节/秒）
+
+  -h, --help
+          Print help (see a summary with '-h')
+### pack --help
+安装整合包（.mrpack，或结构相同的 .zip）
+
+Usage: mc-downloader.exe pack [OPTIONS] <FILE>
+
+Arguments:
+  <FILE>
+          整合包文件路径
+
+Options:
+  -d, --dir <DIR>
+          目标 .minecraft 目录
+          
+          [default: .]
+
+      --proxy <PROXY>
+          代理地址，例如 http://127.0.0.1:7897
+          
+          默认**直连**：Mojang CDN / Fabric meta / Modrinth CDN 在国内均直连可达。 只有直连拿不到（超时 / 000）时才加这个参数。
+
+      --retry <RETRY>
+          单个文件失败后的重试次数（指数退避 1s/2s/4s…）
+
+      --concurrency <CONCURRENCY>
+          同时下载的文件数（默认 16）
+
+      --piece-conns <PIECE_CONNS>
+          单文件分片时的并发连接数（默认 4）
+
+      --adaptive <ADAPTIVE>
+          自适应连接数（AIMD：快则 +1，慢则减半；worker 上限为 2×piece-conns）
+          
+          [possible values: true, false]
+
+      --timeout <TIMEOUT>
+          建连超时与单次读超时（秒，默认 30）。不是整请求总时限
+
+      --max-speed <MAX_SPEED>
+          全局总带宽上限，如 `5M` / `500K`（1024 进制；纯数字 = 字节/秒）
+
+  -h, --help
+          Print help (see a summary with '-h')
+### --version
+mc-downloader 0.5.0
