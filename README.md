@@ -3,50 +3,64 @@
 > 从 Mojang 官方 CDN 下载 Minecraft 文件，或安装 Modrinth 格式整合包。
 > 下载结果直接是标准 `.minecraft` 目录结构，可被 PCL / 官方启动器 / HMCL 识别。
 
+> ⚠️ **使用前请读**：[免责声明与法律定位](#免责声明与法律定位)（文末）。
+> **一句话**：只从官方源下载**公开文件**；不包含、不分发任何游戏内容；不提供破解或账号绕过。
+
 ---
 
-## ⚠️ 免责声明与法律定位
+## 五分钟上手
 
-**本工具属于通用下载工具，具有实质性非侵权用途。**
+### 1. 下一个文件（最常用）
 
-它只做三件事：
+```bash
+mc-downloader fetch <url> -d .
+```
 
-1. 从 **Mojang 官方 CDN**（`piston-meta.mojang.com` / `resources.download.minecraft.net`）下载**公开可访问**的文件；
-2. 从 **Fabric 官方 meta**（`meta.fabricmc.net`）拉取 profile 与库；
-3. 从整合包 manifest 里列出的**作者公开提供的 URL** 下载模组（逐文件 SHA1 校验）。
+比裸 `curl` 多做四件事：大文件**自动分片并行**（≥8 MB）、**断点续传**（中断后重跑只补缺口）、
+**失败指数退避重试**、**可限速**。服务器不给 `Content-Length`（如 `chunked`）时自动单流下到 EOF。
 
-**它不做的**：
+### 2. 装一个原版
 
-- ❌ 不包含、不分发任何游戏内容
-- ❌ 不提供账号验证绕过、离线破解
-- ❌ 不提供任何"非官方"下载源
-- ❌ 不修改任何第三方软件
-- ❌ 不针对特定侵权用途设计任何功能
+```bash
+mc-downloader vanilla 1.20.1 -d "D:/Games/.minecraft"
+```
 
-### 相关法律条文（陈述条文本身，不构成本项目对自身合法性的判定）
+### 3. 原版 + 加载器（一步装好）
 
-| 依据 | 要点 |
+写一个 `a.toml`：
+
+```toml
+[[task]]
+kind = "mc"
+version = "1.20.1"
+dir = "D:/Games/.minecraft"
+loader = "fabric"          # 或 "forge" / "neoforge"；也可写 "forge:47.4.10" 指定版本
+```
+
+```bash
+mc-downloader run a.toml
+```
+
+### 4. 装整合包
+
+```bash
+mc-downloader pack "xxx.mrpack" -d "D:/Games/.minecraft"
+```
+
+### 装完之后
+
+**用 PCL / HMCL「添加游戏目录」指向 `-d` 的那个目录**，选对应版本启动。
+
+> ⚠️ **本工具只保证目录结构**（`versions/<id>/<id>.json` + `libraries/`），
+> **是否真能启动由你实际打开验证**。
+
+### 出错了先看这三处
+
+| 症状 | 先看 |
 |---|---|
-| 《民法典》第 1197 条 | 网络服务提供者**知道或应当知道**侵权、**未采取必要措施**的，承担连带责任 |
-| 法释〔2020〕19 号 第 7 条 | **明知或应知**侵权仍提供技术支持等帮助的，构成**帮助侵权** |
-
-### 本项目的客观事实
-
-以下只陈述可核验的事实，**不附法律结论**：
-
-- **下载来源**：`piston-meta.mojang.com`、`resources.download.minecraft.net`、`meta.fabricmc.net`、
-  `maven.minecraftforge.net`、`api.curseforge.com`。Forge 的库与 CurseForge 的 302 目标另有
-  **域名白名单校验**，不在名单内的来源会被拒绝或跳过。
-- **不包含、不分发任何游戏内容**；
-- **不提供账号验证绕过或离线破解**；
-- **不启动游戏、不管理账号**——启动交给 PCL / HMCL 这类启动器；
-- **对 CurseForge 标记为禁止第三方分发的模组，只生成人工下载清单**（`manual.txt`），不取直链。
-
-**是否构成侵权，由使用者、权利人及司法机关依法认定。本项目不作此判定。**
-
-**使用前提**：使用者应自行确保对下载内容拥有合法授权。因使用本工具产生的任何法律责任，由使用者自行承担。
-
-本项目与 **Mojang / Microsoft / PCL / HMCL / Modrinth / CurseForge 均无关联**。
+| 某个文件下不动 | 加 `--retry 5`；或 `probe` 测一下源速再填 `mirrors` |
+| 加载器装完启动崩溃 | 看 `versions/<id>/<id>.json` 的 `mainClass` 是否有值 |
+| 想确认配置写得对不对 | 先跑一遍，看它打印的「待下载 N 个文件」是否符合预期 |
 
 ---
 
@@ -198,24 +212,69 @@ GitHub release :   25–92 KB/s
 
 ---
 
-## 构建
+## 构建与开发
 
 ```bash
-cargo build --release
-# 产物: target/release/mc-downloader.exe
+cargo build --release        # 产物: target/release/mc-downloader.exe（需 Rust 1.80+）
 ```
 
-依赖：Rust 1.80+（`let-else` / `LazyLock` 等）。
+**改代码前请读 [`AGENTS.md`](AGENTS.md)** —— 铁律、构建验证三件套（fmt / clippy / test）、
+五个必须知道的坑、以及决策记录该写在哪。
 
 ---
 
 ## 为什么不用启动器的下载功能
 
-不针对任何项目。本工具的定位是：
-
 > **"把文件放到正确的位置"这一件事**，做成一个可脚本化、可复现、可审计的命令。
 
-它不替代启动器，也不依赖启动器的内部实现。
+不替代启动器，也不依赖启动器的内部实现。**完整理由见 `.agents/notes/`。**
+
+---
+
+## ⚠️ 免责声明与法律定位
+
+**本工具属于通用下载工具，具有实质性非侵权用途。**
+
+它只做三件事：
+
+1. 从 **Mojang 官方 CDN**（`piston-meta.mojang.com` / `resources.download.minecraft.net`）下载**公开可访问**的文件；
+2. 从 **Fabric 官方 meta**（`meta.fabricmc.net`）拉取 profile 与库；
+3. 从整合包 manifest 里列出的**作者公开提供的 URL** 下载模组（逐文件 SHA1 校验）。
+
+**它不做的**：
+
+- ❌ 不包含、不分发任何游戏内容
+- ❌ 不提供账号验证绕过、离线破解
+- ❌ 不提供任何"非官方"下载源
+- ❌ 不修改任何第三方软件
+- ❌ 不针对特定侵权用途设计任何功能
+
+### 相关法律条文（陈述条文本身，不构成本项目对自身合法性的判定）
+
+| 依据 | 要点 |
+|---|---|
+| 《民法典》第 1197 条 | 网络服务提供者**知道或应当知道**侵权、**未采取必要措施**的，承担连带责任 |
+| 法释〔2020〕19 号 第 7 条 | **明知或应知**侵权仍提供技术支持等帮助的，构成**帮助侵权** |
+
+### 本项目的客观事实
+
+以下只陈述可核验的事实，**不附法律结论**：
+
+- **下载来源**：`piston-meta.mojang.com`、`resources.download.minecraft.net`、`meta.fabricmc.net`、
+  `maven.minecraftforge.net`、`api.curseforge.com`。Forge 的库与 CurseForge 的 302 目标另有
+  **域名白名单校验**，不在名单内的来源会被拒绝或跳过。
+- **不包含、不分发任何游戏内容**；
+- **不提供账号验证绕过或离线破解**；
+- **不启动游戏、不管理账号**——启动交给 PCL / HMCL 这类启动器；
+- **对 CurseForge 标记为禁止第三方分发的模组，只生成人工下载清单**（`manual.txt`），不取直链。
+
+**是否构成侵权，由使用者、权利人及司法机关依法认定。本项目不作此判定。**
+
+**使用前提**：使用者应自行确保对下载内容拥有合法授权。因使用本工具产生的任何法律责任，由使用者自行承担。
+
+本项目与 **Mojang / Microsoft / PCL / HMCL / Modrinth / CurseForge 均无关联**。
+
+---
 
 ---
 
