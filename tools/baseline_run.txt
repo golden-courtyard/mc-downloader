@@ -1,0 +1,7 @@
+[*] 脚本: C:/Users/lmq/AppData/Local/Temp/rf_test.toml （1 个任务）
+[generic] https://piston-meta.mojang.com/mc/game/version_manifest_v2.json
+[ 207.4 KB / 271.6 KB ]  206.9 KB/s  ETA 00:00
+  [1/1] vm.json
+[*] 新下载 1 个，已存在 0 个
+
+[+] 脚本执行完成：1 个任务

@@ -1,0 +1,11 @@
+[*] 脚本: C:/Users/lmq/AppData/Local/Temp/rf_par.toml （2 个任务）
+[*] 并行模式：2 个任务，每任务并发 8（总并发 16）
+[generic] https://piston-meta.mojang.com/mc/game/version_manifest_v2.json
+[generic] https://piston-meta.mojang.com/mc/game/version_manifest_v2.json
+  [1/1] b.json
+[*] 新下载 1 个，已存在 0 个
+[ 255.4 KB / 271.6 KB ]  252.2 KB/s  ETA 00:00
+  [1/1] a.json
+[*] 新下载 1 个，已存在 0 个
+
+[+] 脚本执行完成：2 个任务
