@@ -67,7 +67,11 @@ enum Cmd {
         #[arg(long)]
         parallel: bool,
     },
-    /// 下载单个 URL（验证分片用；不给 size 时先 HEAD 探测）
+    /// 下载单个 URL 到目录（分片 + 续传 + 重试 + 限速；长度未知时自动单流）
+    ///
+    /// 这是「下一个文件」的默认入口，比裸 curl 多做四件事：大文件自动分片并行、
+    /// 断点续传、失败指数退避重试、可限速。服务器不给 Content-Length（如 chunked）时
+    /// 不再报错，自动退化为单流下到 EOF（只是没法分片，会慢一些）。
     Fetch {
         /// 完整 URL
         url: String,
