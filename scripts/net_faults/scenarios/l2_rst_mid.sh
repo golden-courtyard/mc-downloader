@@ -3,7 +3,7 @@
 # LAYER: l2
 # NEEDS_ROOT: yes
 # TIMEOUT_S: 120
-# ASSERT: check_rst
+# ASSERT: check_rst -- assert_local_only
 # SIZE_MB: 16
 #
 # 场景：下载到约 50% 时从另一进程注入 REJECT --reject-with tcp-reset，测被测端在
@@ -134,7 +134,7 @@ INJECTOR=$!
 CASE_CMD=(--piece-conns 2 fetch "http://127.0.0.1:$PORT/blob.bin" --dir "$OUT" --name t.bin)
 CASE_OUT="$OUT/t.bin"
 CASE_TIMEOUT_S=60
-run_case "$NAME" check_rst "$EXPECT_SHA"
+run_case "$NAME" check_rst "$EXPECT_SHA" -- assert_local_only
 rc=$?
 
 # 注入器可能还在 sleep 0.6s，收掉它；规则再删一次（幂等，删不到也无妨）

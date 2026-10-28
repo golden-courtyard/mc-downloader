@@ -4,6 +4,10 @@
 # NEEDS_ROOT: yes
 # TIMEOUT_S: 120
 # ASSERT: check_loss20
+# LOCAL_ONLY: 不适用 —— 本场景 BIN=timeout 包了一层，run_case 的 CASE_PID 拿到的是
+#   timeout 的 pid，socket 属主是它的子进程 ⇒ ss 按 pid= 过滤永远匹配不到。
+#   2026-10-28 实测三轮全 peers=0。要验需 tree-assert（遍历进程子树）。
+#   （见本文件 `BIN="timeout"` 与 `CASE_CMD=(90 "$REAL_BIN" …)`）
 # SIZE_MB: 128
 # PIECE_CONNS: 32
 #
