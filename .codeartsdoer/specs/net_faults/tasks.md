@@ -585,7 +585,7 @@ VM 那一侧的实际形态（**是该侧的现象，不是通则**）：
 | spec §5.5（可判定）| 一行判定 + 禁无断言 | T0.2 T4.2 的 `ASSERT` 校验 T6.1 | [x] |
 | spec §4.1（耗时）| ≤120s / ≤300s | T6.1 耗时断言 | [x] |
 | spec §4.2（可重复）| **3 次**一致 | T6.1 `--repeat 3` | [x] |
-| spec §4.3（禁公网）| 对端全 127.0.0.1 | T0.2 `assert_local_only` | [x] ⚠️ **13/14**，见 E8 |
+| spec §4.3（禁公网）| 对端全 127.0.0.1 | T0.2 `assert_local_only` | [x] **14/14**，见 E8 |
 | spec §4.5（分层）| 语义走 CI、L2 不进 CI | T1.3 | [x] |
 | spec §6.2（数据）| 非均匀 + **三档尺寸** + 离线 sha1 | T0.4 T0.6 + 批次 4 的 `SIZE_MB:128` | [x] ⚠️ 见 E10 |
 | **design §9**（前置阻塞）| sudo / Rust / netem-mtu | T2.1 T2.2 T2.3 T2.4 | [x] |
@@ -604,7 +604,7 @@ VM 那一侧的实际形态（**是该侧的现象，不是通则**）：
 | **E5** §5.5 | 42 条判定行全是单行、恒定带 `rc=`（如 `PASS l2_rate_8mbit rc=0 rate=7608714 expect=8000000 tol=0.2 sha=ok`）；`ASSERT:` 字段无空场景 |
 | **E6** §4.1 | 每场景自带 `TIMEOUT_S` 断言，14/14 × 3 全 PASS ⇒ 耗时断言逐条已过。已知实测：`l2_delay_20ms` 0.5s · `l2_delay_200ms` 9.8s · `l2_rst_mid` 18.7s · `aimd_step` 235s（< 300s） |
 | **E7** §4.2 | 42/42 PASS，且 `run_all.sh` 自带逐轮结论比对（不一致判 `unstable`），本次未触发 |
-| **E8** §4.3 | **13/14 已实证**（`f4e866c`）：全量 **14/14 PASS**（repeat=1 · 480s · EXIT=0），13 个场景判定行带 `local_only=ok(peers=1,src=sampled)`。<br>**只剩 `aimd_step`**：无 `run_case`（438 行三臂自驱，`bash trace_rows.sh -- timeout …` 三层套娃）⇒ `CASE_PID` 与采样器压根不启动。要给它单独接采样器，不是加一行的事。<br>⚠️ **归因被纠正过两次**，两次都留在提交里没抹：<br>① 先判「采样窗口竞态」→ 各跑 3 轮发现是**确定性**的 ⇒ 真因是**采样分辨率**（`sleep 0.2` 比 `l2p_dup_10` 的下载时长 <0.2s 还粗）。改成自适应 0.02/0.2 + 50 轮上限后 `0B/0行 → 495B/33行`，A/B 证明不扰动吞吐。<br>② 再判 `l2p_loss_20`「结构性不可用」→ 采样器改匹配**整棵进程子树**后它 `0B → 146070B/9738 行`、PASS 且带证据 ⇒ 真因是**只精确匹配了一个 pid**，不是它不可修。<br>⚠️ 曾有全挂的一跑：**11/14**，三个失败全挂 `local_only`，`rc=0`/`sha=ok` 正常，`bad` 零出现 ⇒ **产品没连公网，是装置不可靠**。 |
+| **E8** §4.3 | **14/14 全覆盖**（`0160e58`）：全量 **14/14 PASS**（repeat=1 · 486s · EXIT=0 · 无 FAIL），`report.md` 里 `local_only=ok` 共 **16 处** = 13 个单臂场景各 1 + `aimd_step` 三臂各 1。<br>**`aimd_step` 是最后接上的**：它不走 `run_case`（三臂自驱，`bash trace_rows.sh → timeout → 二进制` 三层套娃），`CASE_PID` 与采样器都不启动。改法 = 在 `run_arm` 里手动起停 `__nf_start_peer_sampler`，每臂把 `dp`/`CASE_PEERS` 搬到臂级变量（后者是全局，下一臂会冲掉），调用前临时切 `CASE_PID` 再还原。<br>⚠️ **必须带的前提**：B/C 臂可能整段零数据（就是 `0fa983b` 用 stalled 守卫放过的那种），此时采样文件为空 ⇒ 走 `live` ⇒ 进程已退出 ⇒ 会误判 `no_evidence`。所以判据前提是**该臂 max>0**（tick 都是非负字节数 ⇒ `max>0` ⇔ 有流量）：有流量才断言、失败即红；零流量记 `skipped(stalled)` 只写诊断。<br>⚠️ **归因被纠正过两次**（都留在提交里没抹）：① 「采样窗口竞态」→ 实测定性 ⇒ 真因是**采样分辨率**（`sleep 0.2` 比 `l2p_dup_10` <0.2s 的下载还粗）；② `l2p_loss_20`「结构性不可用」→ 采样器改匹配**整棵进程子树**后它 `0B → 146070B`。<br>⚠️ 曾有全挂的一跑：**11/14**，三个失败全挂 `local_only`，`rc=0`/`sha=ok` 正常，`bad` 零出现 ⇒ **产品没连公网，是装置不可靠**。 |
 | **E9** §4.5 | `.github/workflows/ci.yml` 只跑 `cargo fmt/clippy/test --all-targets/build`，不含 net_faults；L2/L2′ 仅在 VM 里跑 |
 | **E10** §6.2 | 尺寸实测：`16`(5 个) / `128`(7 个) / `1024`(aimd) —— 三档齐。**另多一档 `8 MB`**（`l2_rate_800kbit`）：800kbit 下 16MB 需 160s > `TIMEOUT_S 120s`，是必要偏离，非违规 |
 | **E11** design §9 | T2.1–T2.4 均已标 ✅，且本次复测 `sudo -n -l` 仍有 `NOPASSWD: /usr/sbin/{tc,iptables,ip}` 三件套 |
