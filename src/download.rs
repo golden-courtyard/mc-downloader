@@ -676,6 +676,65 @@ async fn one_split(
     Ok(())
 }
 
+/// 开区间 `[start, end_excl)` → Range / `Content-Range` 用的闭区间 `(start, end_incl)`。
+///
+/// **算一次、用两次**：请求头与 `Content-Range` 校验共用这一个换算。
+/// 若两处各写一次 `end - 1`，任一侧单独改动都会让**所有**分片被判"区间不符"，
+/// 而纯字符串单测发现不了 —— 这是唯一能锁住它的写法。
+fn byte_range(start: u64, end_excl: u64) -> (u64, u64) {
+    (start, end_excl - 1)
+}
+
+/// 校验 `Content-Range` 覆盖的区间与请求的分片一致。
+///
+/// 为什么需要：只校验 `206` + 长度**抓不到"起点错"**——服务器回了 206、
+/// 长度也对，但区间起点不是请求的位置（CDN 缓存错位 / 多源镜像配错 / 代理改写），
+/// 数据就会被写到错误偏移上：不报错、文件大小正确、只有 sha1 错，极难查。
+///
+/// `end_incl` 是**闭区间**终点；调用方传 `pj.end - 1`（`PieceJob.end` 是开区间）。
+fn check_content_range(header: &str, start: u64, end_incl: u64) -> anyhow::Result<()> {
+    let raw = header.trim();
+    // 单位大小写不敏感（ABNF 字面量如此，`BYTES` 也合法）。
+    // `bytes=100-199/1000` 没有空白 ⇒ unit 变成整串 ⇒ 不等于 bytes ⇒ 照样报错。
+    let (unit, after_unit) = raw
+        .split_once(|c: char| c.is_ascii_whitespace())
+        .unwrap_or((raw, ""));
+    if !unit.eq_ignore_ascii_case("bytes") {
+        bail!("Content-Range 缺少 bytes 单位: {raw}");
+    }
+    let rest = after_unit.trim_start();
+    let (range, total) = rest
+        .split_once('/')
+        .with_context(|| format!("Content-Range 缺少 `/总长`: {raw}"))?;
+    let (s_str, e_str) = range
+        .split_once('-')
+        .with_context(|| format!("Content-Range 区间缺少 `-`: {raw}"))?;
+    let got_start: u64 = s_str
+        .trim()
+        .parse()
+        .with_context(|| format!("Content-Range 起点解析失败: {raw}"))?;
+    let got_end: u64 = e_str
+        .trim()
+        .parse()
+        .with_context(|| format!("Content-Range 终点解析失败: {raw}"))?;
+    // 总长：**只校验格式，不比对实际文件大小**（比对交给全文件 sha1 —— 这里拿不到
+    // 权威的 file_size 语义，也不该为它改签名）。`*` 表示未知 ⇒ 跳过格式校验。
+    let total = total.trim();
+    if total != "*" {
+        let _: u64 = total
+            .parse()
+            .with_context(|| format!("Content-Range 总长解析失败: {raw}"))?;
+    }
+
+    if got_start != start || got_end != end_incl {
+        bail!(
+            "Content-Range 与请求的分片不符: 服务器回 {got_start}-{got_end}，\
+             请求 {start}-{end_incl}，原始 header: {raw}"
+        );
+    }
+    Ok(())
+}
+
 /// 拉一个分片并写到指定偏移
 async fn fetch_piece(
     client: &reqwest::Client,
@@ -689,11 +748,14 @@ async fn fetch_piece(
         .ok_or_else(|| anyhow::anyhow!("源 {} 不存在", pj.source_idx))?;
     let t0 = std::time::Instant::now();
 
+    // 请求与校验共用同一个开→闭换算，避免两处各自 `pj.end - 1` 而漂移
+    let (req_start, req_end_incl) = byte_range(pj.start, pj.end);
+
     let resp = client
         .get(&url)
         .header(
             reqwest::header::RANGE,
-            format!("bytes={}-{}", pj.start, pj.end - 1),
+            format!("bytes={req_start}-{req_end_incl}"),
         )
         .send()
         .await?;
@@ -705,6 +767,26 @@ async fn fetch_piece(
             resp.status(),
             url
         );
+    }
+
+    // 206 + 长度对上还不够：区间起点错时长度照样对，数据会被写到错误偏移。
+    //
+    // 下面三条失败出口都先 `record_failure` 再响亮报错，与上面"不支持 Range"那条一致。
+    // **但要注意它对本轮下载是空写**：`pool.pick()` 全仓只有一个生产调用点 ——
+    // `one_split` 里建 `PieceJob` 时（`source_idx: pool.pick()`），之后 `sched.close()`；
+    // 重试走的是 `url_of(pj.source_idx)`，源不会变。保留它是为将来"重试时重选源"留的占位。
+    let cr = resp
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .ok_or_else(|| anyhow::anyhow!("服务器未返回 Content-Range（206 必须带它）: {url}"))
+        .inspect_err(|_| pool.record_failure(pj.source_idx))?
+        .to_str()
+        .with_context(|| format!("Content-Range 不是合法 ASCII: {url}"))
+        .inspect_err(|_| pool.record_failure(pj.source_idx))?;
+    if let Err(e) = check_content_range(cr, req_start, req_end_incl) {
+        pool.record_failure(pj.source_idx);
+        return Err(e)
+            .with_context(|| format!("分片 {} 的 Content-Range 校验失败: {url}", pj.piece_idx));
     }
 
     let expect = (pj.end - pj.start) as usize;
@@ -793,5 +875,61 @@ mod tests {
             ..Default::default()
         };
         assert!(client(&o).is_err(), "非法代理地址应当报错，而不是静默直连");
+    }
+
+    #[test]
+    fn byte_range_converts_exclusive_end_to_inclusive() {
+        assert_eq!(byte_range(100, 200), (100, 199));
+        assert_eq!(byte_range(0, 1), (0, 0));
+    }
+
+    #[test]
+    fn content_range_accepts_matching_range() {
+        assert!(check_content_range("bytes 100-199/1000", 100, 199).is_ok());
+    }
+
+    #[test]
+    fn content_range_rejects_wrong_start() {
+        let e = check_content_range("bytes 100-199/1000", 101, 199).unwrap_err();
+        let msg = format!("{e:#}");
+        assert!(msg.contains("100-199"), "错误里要有服务器回的区间: {msg}");
+        assert!(msg.contains("101-199"), "错误里要有请求的区间: {msg}");
+    }
+
+    #[test]
+    fn content_range_rejects_wrong_end() {
+        let e = check_content_range("bytes 100-199/1000", 100, 198).unwrap_err();
+        let msg = format!("{e:#}");
+        assert!(msg.contains("100-199"), "错误里要有服务器回的区间: {msg}");
+        assert!(msg.contains("100-198"), "错误里要有请求的区间: {msg}");
+    }
+
+    #[test]
+    fn content_range_accepts_unknown_total() {
+        assert!(check_content_range("bytes 100-199/*", 100, 199).is_ok());
+    }
+
+    #[test]
+    fn content_range_rejects_bad_total() {
+        assert!(check_content_range("bytes 100-199/abc", 100, 199).is_err());
+        assert!(check_content_range("bytes 100-199/", 100, 199).is_err());
+    }
+
+    #[test]
+    fn content_range_accepts_uppercase_unit() {
+        // ABNF 字面量大小写不敏感，`BYTES` / `Bytes` 都是合法格式
+        assert!(check_content_range("BYTES 100-199/1000", 100, 199).is_ok());
+        assert!(check_content_range("Bytes 100-199/*", 100, 199).is_ok());
+    }
+
+    #[test]
+    fn content_range_rejects_equals_separator() {
+        // `bytes=` 不是合法格式（RFC 7233 是 `bytes <s>-<e>/<total>`）
+        assert!(check_content_range("bytes=100-199/1000", 100, 199).is_err());
+    }
+
+    #[test]
+    fn content_range_rejects_garbage_without_panic() {
+        assert!(check_content_range("garbage", 0, 0).is_err());
     }
 }
