@@ -27,14 +27,24 @@
 ## 三、构建与验证（判据都是"跑出来的"，不看 IDE 脸色）
 
 ```bash
-cargo fmt --all                                    # ① 格式（pre-commit 门会拦）
-cargo clippy --all-targets --locked -- -D warnings  # ② lint（-D warnings = 警告即错）
-cargo test --lib --locked                          # ③ 单测（当前 113 条）
-cargo build --release                              # ④ 产物：target/release/mc-downloader.exe
+cargo fmt --all                                     # ① 格式（pre-commit 门会拦）
+cargo clippy --all-targets --locked -- -D warnings   # ② lint（-D warnings = 警告即错）
+CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（当前 130 条）
+cargo build --release                               # ④ 产物：target/release/mc-downloader.exe
 ```
 
 **⚠️ 提交前必须跑完 ①②③**。这不是建议 —— **2026-10-25 曾因只跑「能编译 + 单测」而连续 5 次 CI 失败**：
 CI 查的是 fmt / clippy / test 三样，而我只验了后两样的一半。
+
+**⚠️ ③ 为什么带 `CARGO_INCREMENTAL=0`**（2026-10-28 两次独立交付各踩一次）：
+
+沙箱里的 shell 会在 `target/debug/incremental/mc_downloader-*/` 下留下**删不动也 rename 不动**的文件；
+cargo 下一轮往里写 `dep-graph.part.bin` 时被拒 ⇒ `exit 101` + `error: could not compile ... os error 5`。
+下一次跑还会撞同一堵墙（自锁），而且**每次 cargo 跑完都可能重新楔住**。
+
+**判据：`TEST=101` 是工具自述，`error: could not compile` 才是产物 —— 红的是构建，不是测试。**
+不看日志就会把它报成「代码改坏了」。`CARGO_INCREMENTAL=0` 不写增量 session 目录，从源头绕开；
+「跑之前先删 `target/debug/incremental`」也行，但那个删除必须在**沙箱外**做，不如前者可靠。
 
 **提交门**（本机状态，新克隆/换机器要装一次）：
 
@@ -42,7 +52,7 @@ CI 查的是 fmt / clippy / test 三样，而我只验了后两样的一半。
 git config core.hooksPath .githooks      # 装了之后，暂存有 .rs 就跑 cargo fmt --check
 ```
 
-**CI**：`.github/workflows/ci.yml` 跑 ①②③④。**推送后要真的看结果**（`gh run watch`），
+**CI**：`.github/workflows/ci.yml` 跑 ①②③④（CI 不在沙箱里，③ 不需要 `CARGO_INCREMENTAL=0`）。**推送后要真的看结果**（`gh run watch`），
 不要把"push 成功"当成"CI 通过"。
 
 ---
