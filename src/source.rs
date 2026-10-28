@@ -60,25 +60,38 @@ impl SourcePool {
 
     /// 当前吞吐估计最高的源下标；**全等时按轮转依次返回**。
     ///
+    /// 空池返回 0（历史契约，调用方靠 `url_of` 报"源不存在"）。
+    pub fn pick(&self) -> usize {
+        self.pick_excluding(&[]).unwrap_or(0)
+    }
+
+    /// 在**未被排除**的源里选：同一套规则（游标轮转 + 全扫描取最大）。
+    ///
     /// 扫描从游标位置开始、扫完一整圈，取遇到的第一个最大值：
     /// - 某个源严格最大 ⇒ 无论从哪开始都会在那一圈被选中（全扫描保证）
-    /// - 全部相等 ⇒ 谁都不严格大于起点，返回起点本身 ⇒ 游标自增 ⇒ 天然轮流
-    pub fn pick(&self) -> usize {
+    /// - 剩下的全部相等 ⇒ 谁都不严格大于起点，返回起点（未被排除的那个）⇒ 天然轮流
+    /// - 全部被排除 / 空池 ⇒ `None`
+    pub fn pick_excluding(&self, skip: &[usize]) -> Option<usize> {
         let g = match self.sources.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
         let n = g.len();
         if n == 0 {
-            return 0;
+            return None;
         }
         let start = self.cursor.fetch_add(1, Ordering::Relaxed) % n;
-        let mut best = start;
-        // 必须扫完 n-1 个，**不能"找到更大的就 break"** —— 提前退会破坏轮转
-        for k in 1..n {
+        let mut best: Option<usize> = None;
+        // 必须扫完一整圈，**不能"找到更大的就 break"** —— 提前退会破坏轮转
+        for k in 0..n {
             let i = (start + k) % n;
-            if g[i].ewma_bps > g[best].ewma_bps {
-                best = i;
+            if skip.contains(&i) {
+                continue;
+            }
+            match best {
+                None => best = Some(i),
+                Some(b) if g[i].ewma_bps > g[b].ewma_bps => best = Some(i),
+                _ => {}
             }
         }
         best
@@ -245,5 +258,42 @@ mod tests {
         let p = SourcePool::new(&[]);
         assert_eq!(p.pick(), 0, "空池应返回 0 而不是 panic");
         assert_eq!(p.pick(), 0, "第二次同样安全");
+        // pick() 现在委托给它，空池的 None 分支也要真跑到
+        assert_eq!(p.pick_excluding(&[]), None, "空池没有可选源，应返回 None");
+    }
+
+    #[test]
+    fn pick_excluding_skips_listed() {
+        let p = pool3();
+        // 3 源全等、排除 0：结果只能在 {1,2}，且两个都得用上（否则等于换个恒真断言）
+        let got: Vec<usize> = (0..6).map(|_| p.pick_excluding(&[0]).unwrap()).collect();
+        assert!(!got.contains(&0), "被排除的 0 不该被选中: {got:?}");
+        assert!(got.iter().all(|i| i == &1 || i == &2), "越界: {got:?}");
+        assert!(
+            got.contains(&1) && got.contains(&2),
+            "两个可用源都该轮到: {got:?}"
+        );
+    }
+
+    #[test]
+    fn pick_excluding_returns_none_when_all_skipped() {
+        let p = pool3();
+        assert_eq!(p.pick_excluding(&[0, 1, 2]), None, "全部排除时无源可选");
+    }
+
+    #[test]
+    fn pick_excluding_still_prefers_max() {
+        let p = pool3();
+        // 把 c（下标 2）抬成唯一最大，再排除 a（下标 0）
+        for _ in 0..5 {
+            p.record_success(2, 100 * 1048576, 1.0);
+        }
+        for _ in 0..5 {
+            assert_eq!(
+                p.pick_excluding(&[0]),
+                Some(2),
+                "唯一最大源即便被跳过列表绕开也要选它"
+            );
+        }
     }
 }
