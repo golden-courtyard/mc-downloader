@@ -3,7 +3,7 @@
 # LAYER: l2
 # NEEDS_ROOT: yes
 # TIMEOUT_S: 300
-# ASSERT: check_aimd
+# ASSERT: check_aimd -- assert_local_only
 # SIZE_MB: 1024
 # PIECE_CONNS: 1 (A) / 16 (B)
 #
@@ -216,6 +216,19 @@ SEG_MS=25000
 
 start_origin "$SIZE_MB" "$EXPECT_SHA" || { echo "FAIL $NAME origin_failed"; exit 1; }
 
+# 每臂的采样证据：run_arm 里填、check_aimd 里读。
+# ⚠️ 必须搬走：`CASE_PEERS` 是**全局**，下一臂调 __nf_start_peer_sampler 会把它冲掉。
+# ⚠️ 先声明成空串：本文件 `set -u`，未定义变量一引用就退出。
+ARM_DP_A="" ARM_PEERS_A="" ARM_DP_B="" ARM_PEERS_B="" ARM_DP_C="" ARM_PEERS_C=""
+
+# 前置校验：本文件**直接用 lib.sh 的 `__nf_*` 内部采样器**（要跨臂持有采样证据，
+# `run_case` 表达不了这个生命周期）。它们"不是契约"、可能被改名 ⇒ 在这里 fail-fast：
+# 没有这行，改名后 `bash -n` 仍过、要等 235s 跑完才在 check_aimd 里炸。
+for _fn in __nf_start_peer_sampler __nf_stop_peer_sampler; do
+    declare -F "$_fn" >/dev/null || { echo "FAIL $NAME lib_missing:$_fn"; exit 1; }
+done
+unset _fn
+
 # ── 跑一臂：起下载 → 按绝对时刻换挡 → 收工 ─────────────────────────────────
 run_arm() {
     local tag="$1" conns="$2" adaptive="$3"
@@ -231,6 +244,10 @@ run_arm() {
         timeout "$ARM_S" "$REAL_BIN" --adaptive="$adaptive" --piece-conns "$conns" \
         fetch "http://127.0.0.1:$PORT/blob.bin" --dir "$dir" --name t.bin &
     local dp=$!
+    # §4.3 证据：采样本臂进程树的全部对端（trace_rows.sh → timeout → 二进制 三层，
+    # 采样器自己会 pgrep 子树，见 lib.sh 的 __nf_pid_tree）。
+    __nf_start_peer_sampler "$dp"
+    local peers_file="$CASE_PEERS"   # 当场存下路径，否则下一臂会把它冲掉
 
     # 按「距 t0 的绝对毫秒」换挡，避免 sleep 累积漂移
     while :; do
@@ -247,6 +264,13 @@ run_arm() {
     apply rate 80mbit || true              # 段 3
 
     wait "$dp" 2>/dev/null
+    __nf_stop_peer_sampler
+    # 证据搬到臂级变量：check_aimd 在三个臂全跑完之后才读，那时 CASE_* 早已被覆盖
+    case "$tag" in
+        a) ARM_DP_A="$dp"; ARM_PEERS_A="$peers_file" ;;
+        b) ARM_DP_B="$dp"; ARM_PEERS_B="$peers_file" ;;
+        c) ARM_DP_C="$dp"; ARM_PEERS_C="$peers_file" ;;
+    esac
     return 0
 }
 
@@ -302,6 +326,35 @@ arm_stats() {
 # 取 stats 行里某个 key 的值。用 grep -o 而不是 sed 的 \b：实测本机 sed 对 `n2=`
 # 这种「短键名紧跟数字」的 \b 边界判断会取空（`zero2=4 n2=23` 里 n2 取不到）。
 get() { grep -o "$1=[0-9]*" <<<"$2" | head -1 | cut -d= -f2; }
+
+# ── 每臂一条 §4.3 断言 ──────────────────────────────────────────────────────
+#   判据前提 = **该臂真的跑过网络**：所有 tick 都为 0 是"环境停摆"，不是"连了公网"。
+#   用 `max`（arm_stats 里「所有段里最大的单 tick 字节数」）当判据 —— tick 都是非负
+#   字节数 ⇒ max>0 ⇔ 总量>0，max==0 ⇔ 总量 0。**不另起一套统计**。
+#   零流量的记 `skipped(stalled)`，与既有的 `B:seg2=0(stalled)` / `C:seg2=0(stalled)` 同构：
+#   只写诊断，不进 PASS/FAIL（否则把"环境停摆"记到"产品"账上，就是 0fa983b 修掉的那类错）。
+#
+#   打印 detail 片段；返回 0 = 不该判失败（含 skipped），1 = 有流量却采不到对端/连了非本地。
+local_only_frag() {   # <臂名> <max> <dp> <peers 日志>
+    local tag="$1" mx="${2:-0}" dp="$3" pf="$4"
+    if (( mx <= 0 )); then
+        printf '%s:local_only=skipped(stalled) ' "$tag"
+        return 0
+    fi
+    # assert_local_only 的证据归属要求 pid == CASE_PID：临时切过去，用完还原（两者都是全局）
+    local keep_pid="$CASE_PID" keep_peers="$CASE_PEERS" rc=0 frag
+    CASE_PID="$dp"; CASE_PEERS="$pf"
+    if assert_local_only "$dp"; then
+        frag="$tag:local_only=ok"
+    else
+        # ASSERT_DETAIL 本身已带 `local_only=` 前缀 —— 这里不能再拼一次，
+        # 否则判定行会出现 `local_only=local_only=bad(...)`，按 key 解析的人会被坑。
+        frag="$tag:${ASSERT_DETAIL}"; rc=1
+    fi
+    CASE_PID="$keep_pid"; CASE_PEERS="$keep_peers"
+    printf '%s ' "$frag"
+    return $rc
+}
 
 # ── 判据 ───────────────────────────────────────────────────────────────────
 check_aimd() {
@@ -404,6 +457,16 @@ check_aimd() {
     #    停摆恰恰证明"这与 tuner 无关"⇒ 不进 PASS/FAIL，只记 stalled。
     if (( c_seg2 <= 0 )); then
         detail+="C:seg2=0(stalled) "; fi
+
+    # ── §4.3 本地性：三臂各一条（证据来自该臂自己的采样子壳）────────────────
+    local a_max b_max frag
+    a_max="$(get max "$a")"; b_max="$(get max "$b")"
+    frag="$(local_only_frag A "$a_max" "$ARM_DP_A" "$ARM_PEERS_A")" || ok=1
+    detail+="$frag"
+    frag="$(local_only_frag B "$b_max" "$ARM_DP_B" "$ARM_PEERS_B")" || ok=1
+    detail+="$frag"
+    frag="$(local_only_frag C "$c_max" "$ARM_DP_C" "$ARM_PEERS_C")" || ok=1
+    detail+="$frag"
 
     ASSERT_DETAIL="$detail"
     return $ok
