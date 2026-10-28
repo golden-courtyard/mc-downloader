@@ -3,7 +3,7 @@
 # LAYER: l2
 # NEEDS_ROOT: yes
 # TIMEOUT_S: 60
-# ASSERT: assert_rate -- assert_sha
+# ASSERT: assert_rate -- assert_sha -- assert_local_only
 # SIZE_MB: 16
 #
 # 场景：链路限速 80mbit（16MB ≈ 1.6s），落盘后校验内容与吞吐。
@@ -29,7 +29,7 @@ apply rate 80mbit || { echo "FAIL $NAME apply_failed"; exit 1; }
 CASE_CMD=(--piece-conns 4 fetch "http://127.0.0.1:$PORT/blob.bin" --dir "$OUT" --name t.bin)
 CASE_OUT="$OUT/t.bin"
 CASE_TIMEOUT_S=60
-run_case "$NAME" assert_rate "$TARGET_BPS" -- assert_sha "$EXPECT_SHA"
+run_case "$NAME" assert_rate "$TARGET_BPS" -- assert_sha "$EXPECT_SHA" -- assert_local_only
 rc=$?
 
 clear

@@ -3,7 +3,7 @@
 # LAYER: l2p
 # NEEDS_ROOT: yes
 # TIMEOUT_S: 60
-# ASSERT: assert_sha
+# ASSERT: assert_sha -- assert_local_only
 # SIZE_MB: 128
 # PIECE_CONNS: 32
 #
@@ -33,7 +33,7 @@ apply delay 10ms reorder 10% || { echo "FAIL $NAME apply_failed"; exit 1; }
 CASE_CMD=(--piece-conns "$PIECE_CONNS" fetch "http://127.0.0.1:$PORT/blob.bin" --dir "$OUT" --name t.bin)
 CASE_OUT="$OUT/t.bin"
 CASE_TIMEOUT_S=50
-run_case "$NAME" assert_sha "$EXPECT_SHA"
+run_case "$NAME" assert_sha "$EXPECT_SHA" -- assert_local_only
 rc=$?
 
 clear

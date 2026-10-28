@@ -3,7 +3,7 @@
 # LAYER: l2
 # NEEDS_ROOT: yes
 # TIMEOUT_S: 60
-# ASSERT: assert_elapsed_min -- assert_sha
+# ASSERT: assert_elapsed_min -- assert_sha -- assert_local_only
 # SIZE_MB: 16
 #
 # 场景：链路 RTT 200ms（抖动 50ms），16MB 下完并校验内容，同时看总耗时下界。
@@ -42,7 +42,7 @@ apply delay 200ms 50ms || { echo "FAIL $NAME apply_failed"; exit 1; }
 CASE_CMD=(--piece-conns 4 fetch "http://127.0.0.1:$PORT/blob.bin" --dir "$OUT" --name t.bin)
 CASE_OUT="$OUT/t.bin"
 CASE_TIMEOUT_S=60
-run_case "$NAME" assert_elapsed_min "$MIN_MS" -- assert_sha "$EXPECT_SHA"
+run_case "$NAME" assert_elapsed_min "$MIN_MS" -- assert_sha "$EXPECT_SHA" -- assert_local_only
 rc=$?
 
 clear
