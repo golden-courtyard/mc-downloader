@@ -492,6 +492,7 @@ async fn one_split(
                 // 本分片已试过的源：**每片一份**，重试时据此换源（不能提到 one_split 里共享）
                 let mut tried: Vec<usize> = Vec::new();
                 let mut attempt = 0u32;
+                let mut fatal: Option<anyhow::Error> = None;
                 loop {
                     match fetch_piece(&c, &pj, &t, &pg, &pool, &mut tried).await {
                         Ok(()) => {
@@ -499,20 +500,26 @@ async fn one_split(
                             break;
                         }
                         Err(e) => {
+                            // 无源可用 = 不可恢复：退避只会原地再撞一次，别白等
+                            if e.downcast_ref::<SourcesExhausted>().is_some() {
+                                fatal = Some(e.context(format!("分片 {} 无可用源", pj.piece_idx)));
+                                break;
+                            }
                             if attempt >= retries {
-                                // worker 即将退出：把闸门槽还回去，别让计数器悬着
-                                if let Some((_, n)) = &gate {
-                                    n.fetch_sub(1, Ordering::Relaxed);
-                                }
-                                return Err(e.context(format!("分片 {} 重试耗尽", pj.piece_idx)));
+                                fatal = Some(e.context(format!("分片 {} 重试耗尽", pj.piece_idx)));
+                                break;
                             }
                             tokio::time::sleep(Duration::from_secs(1u64 << attempt)).await;
                             attempt += 1;
                         }
                     }
                 }
+                // 闸门槽只在这一处释放 —— 两个失败出口 + 成功出口共用它
                 if let Some((_, n)) = &gate {
                     n.fetch_sub(1, Ordering::Relaxed);
+                }
+                if let Some(e) = fatal {
+                    return Err(e);
                 }
             }
             Ok::<_, anyhow::Error>(())
@@ -736,6 +743,20 @@ fn check_content_range(header: &str, start: u64, end_incl: u64) -> anyhow::Resul
     Ok(())
 }
 
+/// 所有源都试过了 —— 不可恢复，退避重试只会原地再撞一次。
+///
+/// 用它当标记类型而不是匹配错误文案：文案会改，类型不会。
+#[derive(Debug)]
+struct SourcesExhausted;
+
+impl std::fmt::Display for SourcesExhausted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("所有源都试过了")
+    }
+}
+
+impl std::error::Error for SourcesExhausted {}
+
 /// 拉一个分片并写到指定偏移
 async fn fetch_piece(
     client: &reqwest::Client,
@@ -747,9 +768,11 @@ async fn fetch_piece(
 ) -> Result<()> {
     // 每次尝试都现选源：`tried` 为空时等价于 `pick()`（轮转 + 择优）。
     // 这样前几片记录的 ewma 才能影响后几片的选择 —— 建 job 时选死就学不到东西。
+    // 只抛标记类型、不在这儿加 context：外层重试循环会补上「分片 N 无可用源」，
+    // 两处都加会让错误链里出现两次「分片 N」。
     let idx = pool
         .pick_excluding(tried)
-        .ok_or_else(|| anyhow::anyhow!("分片 {} 的所有源都已试过", pj.piece_idx))?;
+        .ok_or_else(|| anyhow::Error::new(SourcesExhausted))?;
     // 尝试**之前**就记下：失败也必须算"这个源试过了"，否则会原地重试到耗尽
     tried.push(idx);
     let url = pool
@@ -940,5 +963,16 @@ mod tests {
     #[test]
     fn content_range_rejects_garbage_without_panic() {
         assert!(check_content_range("garbage", 0, 0).is_err());
+    }
+
+    #[test]
+    fn sources_exhausted_survives_context() {
+        let e = anyhow::Error::new(SourcesExhausted).context("分片 7");
+        assert!(
+            e.downcast_ref::<SourcesExhausted>().is_some(),
+            "套了 context 之后仍要能 downcast —— 否则不可恢复错误会被误当可重试"
+        );
+        let other: anyhow::Error = anyhow::anyhow!("别的错");
+        assert!(other.downcast_ref::<SourcesExhausted>().is_none());
     }
 }
