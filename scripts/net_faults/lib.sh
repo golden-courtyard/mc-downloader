@@ -552,6 +552,33 @@ __nf_verdict() {   # PASS|FAIL  name  detail
     return 0
 }
 
+# 输出 root 及其全部后代的 pid（换行分隔），最多 4 层。
+# 用途：采样器要能看见 wrapper（timeout / bash -c）下面的真进程 ——
+#   `ss` 的 socket 属主是那个真进程，不是 wrapper 自己。
+# ⚠ 必须有层数上限：无上限 + pid 复用 = 潜在死循环（4 层够 `bash → trace_rows → timeout → 二进制`）。
+# ⚠ 数组一律 `=()` 初始化：本机 bash 5.3 实测 `local -a x` 之后 `${#x[@]}` 在
+#   `set -u` 下直接 `unbound variable` 退出（`run_all.sh` 里对 `declare -a` 有同一条记录）。
+__nf_pid_tree() {
+    local root="$1"
+    local -a all=("$root") cur=("$root") next=()
+    local depth=0 k c
+    while ((depth < 4)) && ((${#cur[@]} > 0)); do
+        next=()
+        for k in "${cur[@]}"; do
+            while IFS= read -r c; do
+                [[ -n "$c" ]] && next+=("$c")
+            done < <(pgrep -P "$k" 2>/dev/null)
+        done
+        # 去重：pid 复用理论上可能让同一 pid 再次出现，避免环
+        for k in "${next[@]}"; do
+            [[ " ${all[*]} " == *" $k "* ]] || all+=("$k")
+        done
+        cur=("${next[@]}")
+        depth=$((depth + 1))
+    done
+    printf '%s\n' "${all[@]}"
+}
+
 # 运行期间采样被测进程的全部对端（assert_local_only 的证据来源；
 # 进程一退出 socket 就没了，所以必须边跑边采）
 # ss 的 stderr 单独落文件：采样为空时要能把原因（没装 iproute2 / 无权限）带进判定行
@@ -559,6 +586,7 @@ __nf_start_peer_sampler() {
     local pid="$1"
     local i
     local fast=0
+    local pids_re
     CASE_PEERS="$OUT/logs/peers.$pid.log"
     CASE_PEERS_ERR="$OUT/logs/peers.$pid.err"
     : >"$CASE_PEERS"
@@ -566,8 +594,18 @@ __nf_start_peer_sampler() {
     : >"$CASE_PEERS_ERR.tmp"
     (
         while kill -0 "$pid" 2>/dev/null; do
+            # 匹配整棵子树：wrapper（timeout / bash -c）下面的真进程才是 socket 属主。
+            # 缺 `pgrep`（或缺 `paste` 拼不出串）时退回"只匹配自身" —— 等价于改动前，
+            # 只是看不见 wrapper 的子进程，不会把采样器整个废掉。
+            pids_re=""
+            if command -v pgrep >/dev/null 2>&1; then
+                pids_re="$(__nf_pid_tree "$pid" | paste -sd'|' -)"
+            fi
+            if [[ -z "$pids_re" ]]; then
+                pids_re="$pid"
+            fi
             ss -tnp 2>"$CASE_PEERS_ERR.tmp" |
-                awk -v p="pid=$pid," 'index($0, p) { print $5 }'
+                awk -v p="pid=(${pids_re})," '$0 ~ p { print $5 }'
             # ss 的报错只留首条（≤3 行）：不限的话 120s 能刷到 500+ 行，
             # 走 no_evidence 分支时会把整坨拼进一行判定（IMPL-9）。
             if [[ -s "$CASE_PEERS_ERR.tmp" && ! -s "$CASE_PEERS_ERR" ]]; then

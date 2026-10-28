@@ -3,11 +3,7 @@
 # LAYER: l2p
 # NEEDS_ROOT: yes
 # TIMEOUT_S: 120
-# ASSERT: check_loss20
-# LOCAL_ONLY: 不适用 —— 本场景 BIN=timeout 包了一层，run_case 的 CASE_PID 拿到的是
-#   timeout 的 pid，socket 属主是它的子进程 ⇒ ss 按 pid= 过滤永远匹配不到。
-#   2026-10-28 实测三轮全 peers=0。要验需 tree-assert（遍历进程子树）。
-#   （见本文件 `BIN="timeout"` 与 `CASE_CMD=(90 "$REAL_BIN" …)`）
+# ASSERT: check_loss20 -- assert_local_only
 # SIZE_MB: 128
 # PIECE_CONNS: 32
 #
@@ -109,7 +105,7 @@ apply loss 20% || { echo "FAIL $NAME apply_failed"; exit 1; }
 CASE_CMD=(90 "$REAL_BIN" --piece-conns "$PIECE_CONNS" fetch "http://127.0.0.1:$PORT/blob.bin" --dir "$OUT" --name t.bin)
 CASE_OUT="$OUT/t.bin"
 CASE_TIMEOUT_S=110          # 兜底：真卡住时由 run_case 杀，90s 的内层 timeout 先到
-run_case "$NAME" check_loss20 "$EXPECT_SHA"
+run_case "$NAME" check_loss20 "$EXPECT_SHA" -- assert_local_only
 rc=$?
 
 clear
