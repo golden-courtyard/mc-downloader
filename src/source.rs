@@ -4,6 +4,7 @@
 //! 连续失败的源会被降权（吞吐按比例衰减），恢复后会自动回升。
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// ewma 平滑系数（越大越灵敏）
 const ALPHA: f64 = 0.3;
@@ -25,6 +26,11 @@ struct SourceState {
 #[derive(Debug)]
 pub struct SourcePool {
     sources: Mutex<Vec<SourceState>>,
+    /// 轮转游标：所有源吞吐全等时用它把分配摊开。
+    ///
+    /// 没有它 `pick()` 会恒返回 0 —— 所有源起点都是 `INITIAL_BPS`、比较又是严格 `>`，
+    /// 谁都不超过下标 0，多源就等价单源（2026-10-28 修的就是这个）。
+    cursor: AtomicUsize,
 }
 
 impl SourcePool {
@@ -40,6 +46,7 @@ impl SourcePool {
             .collect();
         Self {
             sources: Mutex::new(list),
+            cursor: AtomicUsize::new(0),
         }
     }
 
@@ -51,20 +58,26 @@ impl SourcePool {
         self.len() == 0
     }
 
-    /// 当前吞吐估计最高的源下标
+    /// 当前吞吐估计最高的源下标；**全等时按轮转依次返回**。
+    ///
+    /// 扫描从游标位置开始、扫完一整圈，取遇到的第一个最大值：
+    /// - 某个源严格最大 ⇒ 无论从哪开始都会在那一圈被选中（全扫描保证）
+    /// - 全部相等 ⇒ 谁都不严格大于起点，返回起点本身 ⇒ 游标自增 ⇒ 天然轮流
     pub fn pick(&self) -> usize {
         let g = match self.sources.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
-        if g.is_empty() {
+        let n = g.len();
+        if n == 0 {
             return 0;
         }
-        let mut best = 0usize;
-        let mut best_bps = -1.0f64;
-        for (i, s) in g.iter().enumerate() {
-            if s.ewma_bps > best_bps {
-                best_bps = s.ewma_bps;
+        let start = self.cursor.fetch_add(1, Ordering::Relaxed) % n;
+        let mut best = start;
+        // 必须扫完 n-1 个，**不能"找到更大的就 break"** —— 提前退会破坏轮转
+        for k in 1..n {
+            let i = (start + k) % n;
+            if g[i].ewma_bps > g[best].ewma_bps {
                 best = i;
             }
         }
@@ -134,6 +147,14 @@ mod tests {
         ])
     }
 
+    fn pool3() -> SourcePool {
+        SourcePool::new(&[
+            "https://a.example/f".to_string(),
+            "https://b.example/f".to_string(),
+            "https://c.example/f".to_string(),
+        ])
+    }
+
     #[test]
     fn initial_pick_is_first() {
         let p = pool();
@@ -196,5 +217,33 @@ mod tests {
         assert!(p.is_empty());
         assert_eq!(p.pick(), 0);
         assert!(p.url_of(0).is_none());
+    }
+
+    #[test]
+    fn pick_rotates_when_all_equal() {
+        let p = pool3();
+        // 全等时必须依次 0→1→2 循环。**断言完整序列**：只断言"落在 0..3 内"恒真，等于没测
+        let got: Vec<usize> = (0..6).map(|_| p.pick()).collect();
+        assert_eq!(got, vec![0, 1, 2, 0, 1, 2]);
+    }
+
+    #[test]
+    fn pick_prefers_higher_ewma() {
+        let p = pool();
+        // 把 b 抬成唯一最大（100 MB/s 采样 5 次 ⇒ ~35 MB/s，其余仍是 8 MB/s）
+        for _ in 0..5 {
+            p.record_success(1, 100 * 1048576, 1.0);
+        }
+        // 严格最大时，无论游标停在哪、连续调多少次都该选中它
+        for _ in 0..5 {
+            assert_eq!(p.pick(), 1, "唯一最大源应被稳定选中，与游标位置无关");
+        }
+    }
+
+    #[test]
+    fn pick_handles_empty_pool() {
+        let p = SourcePool::new(&[]);
+        assert_eq!(p.pick(), 0, "空池应返回 0 而不是 panic");
+        assert_eq!(p.pick(), 0, "第二次同样安全");
     }
 }
