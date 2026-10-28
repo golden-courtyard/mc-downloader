@@ -425,7 +425,6 @@ async fn one_split(
                 piece_idx: i,
                 start: s,
                 end: e,
-                source_idx: pool.pick(),
             })
         })
         .collect();
@@ -746,14 +745,11 @@ async fn fetch_piece(
     pool: &Arc<SourcePool>,
     tried: &mut Vec<usize>,
 ) -> Result<()> {
-    // 首选 job 建时定下的源；已被试过则换一个没试过的。
-    // 全部试过 ⇒ 直接失败，让 retries 兜底，别原地重试同一个坏镜像。
-    let idx = if tried.is_empty() {
-        pj.source_idx
-    } else {
-        pool.pick_excluding(tried)
-            .ok_or_else(|| anyhow::anyhow!("分片 {} 的所有源都已试过", pj.piece_idx))?
-    };
+    // 每次尝试都现选源：`tried` 为空时等价于 `pick()`（轮转 + 择优）。
+    // 这样前几片记录的 ewma 才能影响后几片的选择 —— 建 job 时选死就学不到东西。
+    let idx = pool
+        .pick_excluding(tried)
+        .ok_or_else(|| anyhow::anyhow!("分片 {} 的所有源都已试过", pj.piece_idx))?;
     // 尝试**之前**就记下：失败也必须算"这个源试过了"，否则会原地重试到耗尽
     tried.push(idx);
     let url = pool
