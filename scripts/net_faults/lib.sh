@@ -558,6 +558,7 @@ __nf_verdict() {   # PASS|FAIL  name  detail
 __nf_start_peer_sampler() {
     local pid="$1"
     local i
+    local fast=0
     CASE_PEERS="$OUT/logs/peers.$pid.log"
     CASE_PEERS_ERR="$OUT/logs/peers.$pid.err"
     : >"$CASE_PEERS"
@@ -572,7 +573,15 @@ __nf_start_peer_sampler() {
             if [[ -s "$CASE_PEERS_ERR.tmp" && ! -s "$CASE_PEERS_ERR" ]]; then
                 head -3 -- "$CASE_PEERS_ERR.tmp" >"$CASE_PEERS_ERR"
             fi
-            sleep 0.2
+            # 自适应间隔：还没采到证据时 0.02s，采到即退到 0.2s。
+            # 另设 50 轮上限（≈2.3s）：pid 匹配不上的病态场景（如 BIN=timeout
+            # 让 CASE_PID 拿到 wrapper），证据永远为空，若不加限会全程 50Hz 跑 ss
+            # —— 对 l2p_loss_20 那种时序敏感场景等于加了 56% 单核的恒定负载。
+            if [[ -s "$CASE_PEERS" ]] || (( ++fast > 50 )); then
+                sleep 0.2
+            else
+                sleep 0.02
+            fi
         done
     ) >>"$CASE_PEERS" 2>/dev/null &
     CASE_PEERS_PID=$!

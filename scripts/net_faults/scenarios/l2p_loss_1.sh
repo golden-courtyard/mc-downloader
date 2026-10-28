@@ -3,11 +3,7 @@
 # LAYER: l2p
 # NEEDS_ROOT: yes
 # TIMEOUT_S: 60
-# ASSERT: assert_sha
-# LOCAL_ONLY: 待查 —— 2026-10-28 全量实测间歇 peers=0（dup_10 三轮全空；loss_1 三轮里
-#   有的 ok(peers=1) 有的空）。下载本身 rc=0 sha=ok。已排除：ss -tnp 仅 26ms、
-#   peers.*.err 无内容。怀疑采样窗口竞态（本场景总耗时 ~0.9s）。
-#   注意 l2_delay_20ms 只 542ms 却 3/3 通过 ⇒ 不是单纯"太快"，是竞态。
+# ASSERT: assert_sha -- assert_local_only
 # SIZE_MB: 128
 # PIECE_CONNS: 32
 #
@@ -36,7 +32,7 @@ apply loss 1% || { echo "FAIL $NAME apply_failed"; exit 1; }
 CASE_CMD=(--piece-conns "$PIECE_CONNS" fetch "http://127.0.0.1:$PORT/blob.bin" --dir "$OUT" --name t.bin)
 CASE_OUT="$OUT/t.bin"
 CASE_TIMEOUT_S=50
-run_case "$NAME" assert_sha "$EXPECT_SHA"
+run_case "$NAME" assert_sha "$EXPECT_SHA" -- assert_local_only
 rc=$?
 
 clear
