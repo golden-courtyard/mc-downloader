@@ -490,9 +490,11 @@ async fn one_split(
                     Some(sm) => sm.acquire().await.ok(),
                     None => None,
                 };
+                // 本分片已试过的源：**每片一份**，重试时据此换源（不能提到 one_split 里共享）
+                let mut tried: Vec<usize> = Vec::new();
                 let mut attempt = 0u32;
                 loop {
-                    match fetch_piece(&c, &pj, &t, &pg, &pool).await {
+                    match fetch_piece(&c, &pj, &t, &pg, &pool, &mut tried).await {
                         Ok(()) => {
                             tbl.lock().await.mark_done(pj.piece_idx);
                             break;
@@ -742,10 +744,21 @@ async fn fetch_piece(
     path: &Path,
     pg: &Arc<Progress>,
     pool: &Arc<SourcePool>,
+    tried: &mut Vec<usize>,
 ) -> Result<()> {
+    // 首选 job 建时定下的源；已被试过则换一个没试过的。
+    // 全部试过 ⇒ 直接失败，让 retries 兜底，别原地重试同一个坏镜像。
+    let idx = if tried.is_empty() {
+        pj.source_idx
+    } else {
+        pool.pick_excluding(tried)
+            .ok_or_else(|| anyhow::anyhow!("分片 {} 的所有源都已试过", pj.piece_idx))?
+    };
+    // 尝试**之前**就记下：失败也必须算"这个源试过了"，否则会原地重试到耗尽
+    tried.push(idx);
     let url = pool
-        .url_of(pj.source_idx)
-        .ok_or_else(|| anyhow::anyhow!("源 {} 不存在", pj.source_idx))?;
+        .url_of(idx)
+        .ok_or_else(|| anyhow::anyhow!("源 {idx} 不存在"))?;
     let t0 = std::time::Instant::now();
 
     // 请求与校验共用同一个开→闭换算，避免两处各自 `pj.end - 1` 而漂移
@@ -761,7 +774,7 @@ async fn fetch_piece(
         .await?;
 
     if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-        pool.record_failure(pj.source_idx);
+        pool.record_failure(idx);
         anyhow::bail!(
             "服务器不支持 Range（HTTP {}），无法分片: {}",
             resp.status(),
@@ -772,19 +785,19 @@ async fn fetch_piece(
     // 206 + 长度对上还不够：区间起点错时长度照样对，数据会被写到错误偏移。
     //
     // 下面三条失败出口都先 `record_failure` 再响亮报错，与上面"不支持 Range"那条一致。
-    // **但要注意它对本轮下载是空写**：`pool.pick()` 全仓只有一个生产调用点 ——
-    // `one_split` 里建 `PieceJob` 时（`source_idx: pool.pick()`），之后 `sched.close()`；
-    // 重试走的是 `url_of(pj.source_idx)`，源不会变。保留它是为将来"重试时重选源"留的占位。
+    // 现在重试会换源（`tried` 累积已试过的下标），所以 record_* 记的是**实际用到的 idx**。
+    // 注意 `pick()` 只在建 job 时调一次，故"本轮降权影响后续 job"仍不成立 ——
+    // 那是惰性派发的事，不是这里的。
     let cr = resp
         .headers()
         .get(reqwest::header::CONTENT_RANGE)
         .ok_or_else(|| anyhow::anyhow!("服务器未返回 Content-Range（206 必须带它）: {url}"))
-        .inspect_err(|_| pool.record_failure(pj.source_idx))?
+        .inspect_err(|_| pool.record_failure(idx))?
         .to_str()
         .with_context(|| format!("Content-Range 不是合法 ASCII: {url}"))
-        .inspect_err(|_| pool.record_failure(pj.source_idx))?;
+        .inspect_err(|_| pool.record_failure(idx))?;
     if let Err(e) = check_content_range(cr, req_start, req_end_incl) {
-        pool.record_failure(pj.source_idx);
+        pool.record_failure(idx);
         return Err(e)
             .with_context(|| format!("分片 {} 的 Content-Range 校验失败: {url}", pj.piece_idx));
     }
@@ -817,7 +830,7 @@ async fn fetch_piece(
     })
     .await??;
 
-    pool.record_success(pj.source_idx, expect as u64, t0.elapsed().as_secs_f64());
+    pool.record_success(idx, expect as u64, t0.elapsed().as_secs_f64());
     Ok(())
 }
 
