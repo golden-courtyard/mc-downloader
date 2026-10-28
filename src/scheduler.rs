@@ -17,8 +17,6 @@ pub struct PieceJob {
     /// 字节区间 [start, end)
     pub start: u64,
     pub end: u64,
-    /// 源下标（由 SourcePool 分配）
-    pub source_idx: usize,
 }
 
 pub struct PieceScheduler {
@@ -110,7 +108,6 @@ mod tests {
             piece_idx: i,
             start: i as u64 * 1024,
             end: (i as u64 + 1) * 1024,
-            source_idx: 0,
         }
     }
 
