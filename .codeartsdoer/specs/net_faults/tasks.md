@@ -581,7 +581,7 @@ VM 那一侧的实际形态（**是该侧的现象，不是通则**）：
 | spec §5.1（L2）| rate×4 / delay×2 / RST×1 | T3.1 T3.2 T3.3 | [x] |
 | spec §5.2（L2′）| loss×3 / reorder×2 / dup×1 | T4.1 T4.2 T4.3 | [x] |
 | spec §5.3（平台语义）| 5 条 | T1.1 | [x] |
-| spec §5.4（AIMD）| 阶跃 + 对照 | T5.1 T5.2 | [x] ⚠️ 见 E4 |
+| spec §5.4（AIMD）| 阶跃 + 对照 | T5.1 T5.2 | [x] 见 E4 |
 | spec §5.5（可判定）| 一行判定 + 禁无断言 | T0.2 T4.2 的 `ASSERT` 校验 T6.1 | [x] |
 | spec §4.1（耗时）| ≤120s / ≤300s | T6.1 耗时断言 | [x] |
 | spec §4.2（可重复）| **3 次**一致 | T6.1 `--repeat 3` | [x] |
@@ -600,7 +600,7 @@ VM 那一侧的实际形态（**是该侧的现象，不是通则**）：
 | **E1** §5.1 | `l2_rate_{8mbit,80mbit,400mbit,800kbit}` + `l2_delay_{20ms,200ms}` + `l2_rst_mid` = 7 场景 × 3 轮 = **21 条 PASS** |
 | **E2** §5.2 | `l2p_loss_{1,5,20}` + `l2p_reorder_{10,25}` + `l2p_dup_10` = 6 × 3 = **18 条 PASS** |
 | **E3** §5.3 | `tests/linux_semantics.rs` 里 **5 个 `#[test]`**（case_sensitive_paths / sparse_set_len / rename_overwrites / unlink_open_file / fd_under_concurrency）；CI 用 `cargo test --all-targets --locked`（**不是 `--lib`**）⇒ 集成测试确实在 CI 里跑 |
-| **E4** §5.4 | `aimd_step` × 3 轮 PASS。**但** `~/net_faults/m5.log` 记着一次 5 轮稳定性实验：**轮 1 轮 4 轮 5 PASS，轮 2 轮 3 FAIL**，两次失败都是同一症状 —— `B:seg2=0 B:zero2=11/18` / `C:seg2=0`（该采到数的时间窗里零字节）。之后只跑过 3 轮通过，**中间改的是 `run_all.sh` 不是场景** ⇒ 「3 轮过」与「5 轮 2 败」同时成立，**该场景有已知 flake，未归因** |
+| **E4** §5.4 | `aimd_step` × 3 轮 PASS。⚠️ **本条曾被记成「flaky、未归因」，2026-10-28 复核后撤回该判断**：<br>`~/net_faults/m5.log`（**06:37**）那次 5 轮里 2 轮 FAIL，症状 `B:seg2=0` / `C:seg2=0`。而 **8 分钟后**的 `0fa983b`（**06:45:16**）标题正是「B/C 无数据守卫改 stalled（不进 PASS/FAIL）」，diff 逐字为：`- ok=1; detail+="B:seg2=0(无数据)"` → `+ detail+="B:seg2=0(stalled)"`。<br>⇒ **m5 的失败就是那道 `ok=1` 造成的，且已被同一次修掉**；`r3.log`（06:58，3 轮 PASS）是**修复后**的结果。<br>⇒ **不是未归因的 flake，是「拿旧证据当现状」** —— 与当天另外两次同型误判（只看 `ls` 前 8 行就说「net_faults 从没跑过」；读实现者的文件读到旧快照就报「没落盘」）同源。 |
 | **E5** §5.5 | 42 条判定行全是单行、恒定带 `rc=`（如 `PASS l2_rate_8mbit rc=0 rate=7608714 expect=8000000 tol=0.2 sha=ok`）；`ASSERT:` 字段无空场景 |
 | **E6** §4.1 | 每场景自带 `TIMEOUT_S` 断言，14/14 × 3 全 PASS ⇒ 耗时断言逐条已过。已知实测：`l2_delay_20ms` 0.5s · `l2_delay_200ms` 9.8s · `l2_rst_mid` 18.7s · `aimd_step` 235s（< 300s） |
 | **E7** §4.2 | 42/42 PASS，且 `run_all.sh` 自带逐轮结论比对（不一致判 `unstable`），本次未触发 |
