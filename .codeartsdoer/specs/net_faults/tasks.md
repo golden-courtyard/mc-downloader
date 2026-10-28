@@ -566,17 +566,36 @@ VM 那一侧的实际形态（**是该侧的现象，不是通则**）：
 
 | 来源 | 条目 | 覆盖任务 | 状态 |
 |---|---|---|---|
-| spec §5.1（L2）| rate×4 / delay×2 / RST×1 | T3.1 T3.2 T3.3 | [ ] |
-| spec §5.2（L2′）| loss×3 / reorder×2 / dup×1 | T4.1 T4.2 T4.3 | [ ] |
-| spec §5.3（平台语义）| 5 条 | T1.1 | [ ] |
-| spec §5.4（AIMD）| 阶跃 + 对照 | T5.1 T5.2 | [ ] |
-| spec §5.5（可判定）| 一行判定 + 禁无断言 | T0.2 T4.2 的 `ASSERT` 校验 T6.1 | [ ] |
-| spec §4.1（耗时）| ≤120s / ≤300s | T6.1 耗时断言 | [ ] |
-| spec §4.2（可重复）| **3 次**一致 | T6.1 `--repeat 3` | [ ] |
-| spec §4.3（禁公网）| 对端全 127.0.0.1 | T0.2 `assert_local_only` | [ ] |
-| spec §4.5（分层）| 语义走 CI、L2 不进 CI | T1.3 | [ ] |
-| spec §6.2（数据）| 非均匀 + **三档尺寸** + 离线 sha1 | T0.4 T0.6 + 批次 4 的 `SIZE_MB:128` | [ ] |
-| **design §9**（前置阻塞）| sudo / Rust / netem-mtu | T2.1 T2.2 T2.3 T2.4 | [ ] |
+| spec §5.1（L2）| rate×4 / delay×2 / RST×1 | T3.1 T3.2 T3.3 | [x] |
+| spec §5.2（L2′）| loss×3 / reorder×2 / dup×1 | T4.1 T4.2 T4.3 | [x] |
+| spec §5.3（平台语义）| 5 条 | T1.1 | [x] |
+| spec §5.4（AIMD）| 阶跃 + 对照 | T5.1 T5.2 | [x] ⚠️ 见 E4 |
+| spec §5.5（可判定）| 一行判定 + 禁无断言 | T0.2 T4.2 的 `ASSERT` 校验 T6.1 | [x] |
+| spec §4.1（耗时）| ≤120s / ≤300s | T6.1 耗时断言 | [x] |
+| spec §4.2（可重复）| **3 次**一致 | T6.1 `--repeat 3` | [x] |
+| spec §4.3（禁公网）| 对端全 127.0.0.1 | T0.2 `assert_local_only` | **[ ] ❌ 见 E8** |
+| spec §4.5（分层）| 语义走 CI、L2 不进 CI | T1.3 | [x] |
+| spec §6.2（数据）| 非均匀 + **三档尺寸** + 离线 sha1 | T0.4 T0.6 + 批次 4 的 `SIZE_MB:128` | [x] ⚠️ 见 E10 |
+| **design §9**（前置阻塞）| sudo / Rust / netem-mtu | T2.1 T2.2 T2.3 T2.4 | [x] |
+
+### 验收证据（2026-10-28 从 Kali 实测日志重建，非凭记忆）
+
+> 全部来自 `~/net_faults/run_all.full.log` 与 `~/net_faults/logs/` 下 42 个逐轮日志。
+> 那次全量跑：**`TOTAL 14/14 passed · repeat=3 · 挂钟 1444s · EXIT=0`**。
+
+| 编号 | 证据 |
+|---|---|
+| **E1** §5.1 | `l2_rate_{8mbit,80mbit,400mbit,800kbit}` + `l2_delay_{20ms,200ms}` + `l2_rst_mid` = 7 场景 × 3 轮 = **21 条 PASS** |
+| **E2** §5.2 | `l2p_loss_{1,5,20}` + `l2p_reorder_{10,25}` + `l2p_dup_10` = 6 × 3 = **18 条 PASS** |
+| **E3** §5.3 | `tests/linux_semantics.rs` 里 **5 个 `#[test]`**（case_sensitive_paths / sparse_set_len / rename_overwrites / unlink_open_file / fd_under_concurrency）；CI 用 `cargo test --all-targets --locked`（**不是 `--lib`**）⇒ 集成测试确实在 CI 里跑 |
+| **E4** §5.4 | `aimd_step` × 3 轮 PASS。**但** `~/net_faults/m5.log` 记着一次 5 轮稳定性实验：**轮 1 轮 4 轮 5 PASS，轮 2 轮 3 FAIL**，两次失败都是同一症状 —— `B:seg2=0 B:zero2=11/18` / `C:seg2=0`（该采到数的时间窗里零字节）。之后只跑过 3 轮通过，**中间改的是 `run_all.sh` 不是场景** ⇒ 「3 轮过」与「5 轮 2 败」同时成立，**该场景有已知 flake，未归因** |
+| **E5** §5.5 | 42 条判定行全是单行、恒定带 `rc=`（如 `PASS l2_rate_8mbit rc=0 rate=7608714 expect=8000000 tol=0.2 sha=ok`）；`ASSERT:` 字段无空场景 |
+| **E6** §4.1 | 每场景自带 `TIMEOUT_S` 断言，14/14 × 3 全 PASS ⇒ 耗时断言逐条已过。已知实测：`l2_delay_20ms` 0.5s · `l2_delay_200ms` 9.8s · `l2_rst_mid` 18.7s · `aimd_step` 235s（< 300s） |
+| **E7** §4.2 | 42/42 PASS，且 `run_all.sh` 自带逐轮结论比对（不一致判 `unstable`），本次未触发 |
+| **E8** §4.3 | ❌ **未验证**：`assert_local_only` 在 `lib.sh:669` 有完整实现（含 `peers==0` 判失败），`CASE_PID` 与 peer 采样器（`:558`）也在，**但 `grep -rn assert_local_only scenarios/` 零命中** —— 14 个场景的 `# ASSERT:` 里一个都没列它。⇒ 机制齐、**没人接线**，`spec §4.3 禁公网` 目前是**假定**而非**验证** |
+| **E9** §4.5 | `.github/workflows/ci.yml` 只跑 `cargo fmt/clippy/test --all-targets/build`，不含 net_faults；L2/L2′ 仅在 VM 里跑 |
+| **E10** §6.2 | 尺寸实测：`16`(5 个) / `128`(7 个) / `1024`(aimd) —— 三档齐。**另多一档 `8 MB`**（`l2_rate_800kbit`）：800kbit 下 16MB 需 160s > `TIMEOUT_S 120s`，是必要偏离，非违规 |
+| **E11** design §9 | T2.1–T2.4 均已标 ✅，且本次复测 `sudo -n -l` 仍有 `NOPASSWD: /usr/sbin/{tc,iptables,ip}` 三件套 |
 
 ---
 
