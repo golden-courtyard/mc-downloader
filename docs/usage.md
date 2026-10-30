@@ -16,6 +16,33 @@
 
 `run` 是脚本入口，"下一批"和"装 MC"都在这里编排。
 
+### 命令怎么拼
+
+```
+mc-downloader.exe  <子命令>  <位置参数>  [--选项 值]...
+                └ 必须第一个 ┘  └ 紧随其后 ┘  └ 顺序随意 ┘
+```
+
+**位置参数的顺序不能换**，每个子命令固定几个：
+
+| 子命令 | 位置参数 |
+|---|---|
+| `fetch` | `<url>` |
+| `probe` | `<url1> <url2> ...`（至少两个） |
+| `vanilla` | `<version>` |
+| `pack` | `<file>` |
+| `run` | `<script.toml>` |
+
+**`--选项` 顺序随意**——七个全局参数都标了 `global = true`，写在子命令前后都行，`--piece-conns 16` 和 `--piece-conns=16` 等价。
+
+复制这个模板改就行：
+
+```powershell
+mc-downloader.exe fetch "<URL>" -d "<目录>" -n "<文件名>" --piece-conns 16
+```
+
+> ⚠️ **`fetch` 不给 `-n` 就落地成 `out.bin`** —— 这是唯一一个"给了才正确"的参数。
+
 ---
 
 ## 二、`fetch`：下一个文件
