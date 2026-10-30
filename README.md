@@ -96,6 +96,8 @@ mc-downloader pack "xxx.mrpack" -d "D:/Games/.minecraft"
 
 > **用于下载你有权下载的文件。** 本工具不判断使用者是否持有相应授权，这一点由使用者自行负责。
 
+**完整教程见 [docs/usage.md](docs/usage.md)** —— 覆盖 `fetch`（下一个文件）、`run`（批量 / 脚本编排）、`probe`（先测再选源），以及六个调优参数（`--concurrency` / `--piece-conns` / `--adaptive` / `--retry` / `--timeout` / `--max-speed`）的实际取舍。下面只给最短的路径。
+
 ### 下载原版
 
 ```bash
