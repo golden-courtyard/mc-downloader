@@ -83,9 +83,20 @@ enum Cmd {
         /// 照常下到 EOF，只是没法分片（大文件会慢一些）。
         #[arg(short, long)]
         size: Option<u64>,
-        /// 落地文件名
-        #[arg(short, long, default_value = "out.bin")]
-        name: String,
+        /// 落地文件名（**默认从 URL 末段推导**，推不出时用 `out.bin`）
+        ///
+        /// 不给时取 URL 的最后一段（去掉 `?query` / `#fragment`、percent-decode）。
+        /// 推不出（以 `/` 结尾、只有主机名）时才回落 `out.bin` 并提示。
+        /// **别让默认值变成常量** —— 同目录连下多个文件时，`out.bin` 会互相覆盖。
+        #[arg(short, long)]
+        name: Option<String>,
+        /// 目标已存在时覆盖
+        ///
+        /// **默认拒绝**：同名文件存在时直接报错退出，而不是覆盖或跳过。
+        /// 跳过会让人以为"下好了"（sha1 为空时它就是这么判的），覆盖会丢上一个文件 ——
+        /// 两种都不该是默认行为。
+        #[arg(long)]
+        force: bool,
         /// 额外镜像 URL（可重复，内容须与 url 相同）
         #[arg(long = "mirror")]
         mirrors: Vec<String>,
@@ -202,9 +213,10 @@ async fn main() -> Result<()> {
             dir,
             size,
             name,
+            force,
             mirrors,
         } => {
-            commands::fetch::run(url, dir, size, name, mirrors, &ctx).await?;
+            commands::fetch::run(url, dir, size, name, force, mirrors, &ctx).await?;
         }
         Cmd::Probe { urls, seconds } => {
             commands::probe::run(urls, seconds, &ctx).await?;

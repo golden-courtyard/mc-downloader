@@ -88,7 +88,11 @@ pub fn parse(content: &str) -> Result<ParsedList> {
 ///
 /// 去掉 `#fragment` 和 `?query` 后取最后一段，再 percent-decode。
 /// `%20` 这类不解码的话，用户会在磁盘上看到 `a%20b.zip` 并以为下错了。
-fn filename_from_url(url: &str) -> Option<String> {
+///
+/// **`fetch` 也用它**（issue #1）：单文件下载的默认落地名不该是常量 `out.bin` ——
+/// 同目录连下两个文件会互相覆盖，而且进度行里看不出这次下的是什么。
+/// 文件名推导的规则只留这一份，`urls_file` 与 `fetch` 共用。
+pub fn filename_from_url(url: &str) -> Option<String> {
     let s = url.split('#').next()?;
     let s = s.split('?').next()?;
     let after_scheme = s.split_once("://").map(|(_, r)| r)?;
@@ -130,6 +134,20 @@ fn hex_val(c: u8) -> Option<u8> {
         b'a'..=b'f' => Some(c - b'a' + 10),
         b'A'..=b'F' => Some(c - b'A' + 10),
         _ => None,
+    }
+}
+
+/// `fetch` 的默认落地名：能推就推，推不出回落 `out.bin`。
+///
+/// 返回 `(名字, 是否回落)` —— 第二个值是给调用方**在输出里说明**用的：
+/// 回落本身不是错（URL 可能真的以 `/` 结尾），但**静默**回落会让用户
+/// 在磁盘上看到 `out.bin` 却不知道为什么（issue #1 的另一半）。
+///
+/// 放这里而不是 `commands/fetch.rs`：那是 bin 侧，`cargo test --lib` 测不到。
+pub fn name_or_out_bin(url: &str) -> (String, bool) {
+    match filename_from_url(url) {
+        Some(n) => (n, false),
+        None => ("out.bin".to_string(), true),
     }
 }
 
@@ -215,5 +233,30 @@ https://a.com/2.zip
         // %zz 不是合法转义 ⇒ 原样保留，不报错（文件名里出现 % 是合法的）
         let p = parse("https://a.com/a%zzb.zip").unwrap();
         assert_eq!(p.entries[0].file_name, "a%zzb.zip");
+    }
+
+    // ── name_or_out_bin：fetch 的默认落地名（issue #1） ──
+
+    #[test]
+    fn name_from_url_is_used_by_fetch() {
+        let (n, fell_back) = name_or_out_bin("https://a.com/d/2015.260564.History_text.pdf");
+        assert_eq!(n, "2015.260564.History_text.pdf");
+        assert!(!fell_back);
+    }
+
+    #[test]
+    fn name_drops_query_even_when_query_contains_slashes() {
+        let (n, _) = name_or_out_bin("https://a.com/f.zip?path=/x/y&sig=1");
+        assert_eq!(n, "f.zip", "query 里的斜杠不能影响末段");
+    }
+
+    #[test]
+    fn unnamed_url_falls_back_to_out_bin_and_says_so() {
+        // 两个典型：以 `/` 结尾、只有主机名
+        for url in ["https://a.com/dir/", "https://example.com"] {
+            let (n, fell_back) = name_or_out_bin(url);
+            assert_eq!(n, "out.bin", "{url}");
+            assert!(fell_back, "{url} 必须报告回落，不能静默");
+        }
     }
 }
