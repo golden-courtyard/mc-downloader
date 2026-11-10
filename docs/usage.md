@@ -38,29 +38,42 @@ mc-downloader.exe  <子命令>  <位置参数>  [--选项 值]...
 复制这个模板改就行：
 
 ```powershell
-mc-downloader.exe fetch "<URL>" -d "<目录>" -n "<文件名>" --piece-conns 16
+mc-downloader.exe fetch "<URL>" -d "<目录>" --piece-conns 16
 ```
 
-> ⚠️ **`fetch` 不给 `-n` 就落地成 `out.bin`** —— 这是唯一一个"给了才正确"的参数。
+> ✅ **`-n` 是可选的**：不给就从 URL 末段推导（去掉 `?query` / `#fragment`、percent-decode）。
+> 推不出（URL 以 `/` 结尾、只有主机名）才回落 `out.bin`，**并且会在输出里说明**。
+> 目标已存在时**默认拒绝**（退出码 1），要覆盖加 `--force`。
 
 ---
 
 ## 二、`fetch`：下一个文件
 
 ```bash
-# 最简
+# 最简（落地名自动从 URL 取）
 mc-downloader fetch "https://example.com/big.zip" -d "D:/Downloads"
 
-# 指定文件名与大小
+# 指定文件名与大小（URL 末段不可靠时，比如带 id= 的查询串）
 mc-downloader fetch "https://example.com/dl?id=123" -d "D:/Downloads" -n big.zip -s 314572800
+
+# 覆盖已存在的同名文件
+mc-downloader fetch "https://example.com/big.zip" -d "D:/Downloads" --force
 ```
 
 | 参数 | 作用 | 不给会怎样 |
 |---|---|---|
 | `-d, --dir` | 目标目录 | 默认当前目录 |
-| `-n, --name` | 落地文件名 | 默认 `out.bin`（URL 末段不可靠时用它） |
+| `-n, --name` | 落地文件名 | **默认从 URL 末段推导**；推不出才 `out.bin`（并在输出里说明）|
+| `--force` | 目标已存在时覆盖 | **默认拒绝**：报错退出（退出码 1），不覆盖也不跳过 |
 | `-s, --size` | 已知大小 | **只影响"分片还是单流"，不影响能否下载** |
 | `--mirror` | 额外镜像 URL，可重复 | 单源 |
+
+**`--force` 为什么是必要的**（而不是默认覆盖或默认跳过）：`fetch` 的 `sha1` 为空，
+而下载引擎对"同名已存在 + 无 sha1"的判定是**当作已完成直接跳过** ——
+默认覆盖会丢上一个文件，默认跳过会让你以为下好了。两种都不该是默认行为，所以默认报错。
+
+**`-n` 与 URL 推导的关系**：显式 `-n` 总是优先。推导规则与 `urls_file` 共用一份
+（`url_list::filename_from_url`），所以两种入口的文件名行为一致。
 
 **`-s` 为什么可以不给**：不给时先发 `HEAD` 探测大小；探测不到（服务器用 `Transfer-Encoding: chunked`）就**走单流下到 EOF**——照常下完，只是没法分片，大文件会慢一些。
 
