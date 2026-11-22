@@ -237,8 +237,14 @@ async fn main() -> Result<()> {
 
             let total = cfg.tasks.len();
             println!("[*] 脚本: {} （{} 个任务）", script.display(), total);
-            let src = settings::Sources::resolve(&ctx.source, ctx.config_path.as_deref())?;
-            commands::run::execute(&cfg.tasks, parallel, &opts, &src).await?;
+            commands::run::execute(
+                &cfg.tasks,
+                parallel,
+                &opts,
+                &ctx.source,
+                ctx.config_path.as_deref(),
+            )
+            .await?;
         }
         Cmd::Fetch {
             url,
