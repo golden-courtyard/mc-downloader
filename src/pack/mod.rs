@@ -98,11 +98,18 @@ fn parse(zip: &mut zip::ZipArchive<File>) -> Result<Parsed> {
         return Ok(Parsed::CurseForge(curseforge::parse_manifest(zip)?));
     }
     // 都没有：把**实际**根目录列出来，别让用户对着"认不出"猜
-    let mut tops: Vec<String> = zip
-        .file_names()
-        .map(|n| n.split('/').next().unwrap_or("").to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
+    //
+    // zip 9 起 `file_names()` / `name()` 都返回 `Result`（非 UTF-8 名字不再被静默 lossy 掉），
+    // 所以这里逐个取、取不到就跳过 —— 列表只用于报错文案，不必因一个坏名字整包失败。
+    let mut tops: Vec<String> = Vec::new();
+    for i in 0..zip.len() {
+        let Ok(entry) = zip.by_index(i) else { continue };
+        let Ok(name) = entry.name() else { continue };
+        let top = name.split('/').next().unwrap_or("");
+        if !top.is_empty() {
+            tops.push(top.to_string());
+        }
+    }
     tops.sort();
     tops.dedup();
     bail!(
@@ -211,7 +218,14 @@ fn extract_overrides(
     let mut skipped = 0usize;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i)?;
-        let name = entry.name().to_string();
+        // zip 9 起 `name()` 返回 `Result`：非 UTF-8 名字不再被静默替换成 `?`。
+        // 名字取不出来就没法校验落点 ⇒ 当成"可疑条目"跳过（与 `..` 同一处置）。
+        let Ok(name_cow) = entry.name() else {
+            eprintln!("[!] 跳过名字不是合法 UTF-8 的 zip 条目（第 {i} 个）");
+            skipped += 1;
+            continue;
+        };
+        let name = name_cow.to_string();
         if name.ends_with('/') {
             continue;
         }
