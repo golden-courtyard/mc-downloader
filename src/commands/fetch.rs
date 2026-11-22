@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::commands::Ctx;
 use mc_downloader::{download, url_list, version};
@@ -36,7 +36,10 @@ pub async fn run(
         eprintln!("[!] 落地名回落为 out.bin —— 想指定名字请加 --name");
     }
 
-    let dst = dir.join(&name);
+    // 落点必须在 `--dir` 之下，而且要在**碰文件系统之前**判：下面有 `--force` 的删除逻辑，
+    // 先 join 再删就等于「拿一个没校验过的路径去删文件」——
+    // 红队实测 `--force -n "..\victim.txt"` 会删掉 dir 之外的文件（2026-11-22）。
+    let dst = resolve_dst(&dir, &name)?;
     if dst.exists() {
         if !force {
             bail!(
@@ -76,4 +79,42 @@ pub async fn run(
     download::run(&[job], &dir, &ctx.opts).await?;
     println!("[+] 完成 -> {}", dst.display());
     Ok(())
+}
+
+/// 把「名字」变成一个**校验过**的落点。
+///
+/// 单独提出来是为了：① 调用点必须在 `--force` 的删除**之前**用它；② 它能被单测覆盖
+/// （`commands` 住在 bin target 里，集成测试摸不到）。
+fn resolve_dst(dir: &std::path::Path, name: &str) -> Result<PathBuf> {
+    mc_downloader::pathsafe::under_root(dir, std::path::Path::new(name))
+        .with_context(|| format!("落地路径不安全，拒绝下载: {name}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_dst_accepts_plain_and_subdir_names() {
+        let dir = std::env::temp_dir().join("mcd-fetch-name");
+        assert!(resolve_dst(&dir, "a.bin").unwrap().ends_with("a.bin"));
+        // `--name sub/x.bin` 是既有用法，不能因为加校验就砍掉
+        assert!(
+            resolve_dst(&dir, "sub/x.bin")
+                .unwrap()
+                .ends_with("sub/x.bin")
+        );
+    }
+
+    #[test]
+    fn resolve_dst_rejects_traversal_before_touching_fs() {
+        let dir = std::env::temp_dir().join("mcd-fetch-name2");
+        for bad in ["../victim.txt", "..\\victim.txt", "/etc/passwd"] {
+            let e = resolve_dst(&dir, bad).unwrap_err();
+            assert!(
+                format!("{e:#}").contains("落地路径不安全"),
+                "应报落地路径不安全: {bad} -> {e:#}"
+            );
+        }
+    }
 }
