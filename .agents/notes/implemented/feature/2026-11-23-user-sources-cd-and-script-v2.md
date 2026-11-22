@@ -44,7 +44,7 @@ Status: implemented
 - **`If-Range` 默认开**：否。多镜像各自算 ETag，拿 A 的去请求 B 必不匹配 ⇒ 回 200 ⇒ 把
   "能用但慢"的镜像判死。默认开等于默认惩罚多源用户。
 - **用 `ClientBuilder::timeout` 治 slowloris**：否。那是整请求总时限，3 GB 文件在慢链路上必然被掐死
-  （Cargo.toml 与 `DESIGN.md` 都有这条取舍）。停滞检测只看"还在不在动"。
+  （Cargo.toml 与 `docs/design/DESIGN.md` 都有这条取舍）。停滞检测只看"还在不在动"。
 
 ## Consequences
 

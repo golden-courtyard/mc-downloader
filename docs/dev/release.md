@@ -24,7 +24,7 @@ cargo build --release --locked
   - 只加功能 → minor
   - 只修 bug → patch
 - [ ] `Cargo.lock` 跟着更新（`cargo build` 一次即可，diff 应只有本包那一行）
-- [ ] `docs/usage.md` 里新增/变更的参数都有条目
+- [ ] `docs/user/usage.md` 里新增/变更的参数都有条目
 - [ ] 文档 emoji 扫描为 0（仓库规矩）
 - [ ] `.agents/notes/` 里本次的持久决策已写（没有就说明这次只是机械改动）
 

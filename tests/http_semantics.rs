@@ -704,7 +704,7 @@ async fn content_range_total_mismatch_is_rejected() {
 /// `Content-Length` 读满（提前 EOF 见 `truncate_mid_is_detected_while_reading_body`）。
 ///
 /// **这条测试的价值是把口径钉住**：若将来有人把 `size` 当强校验（看到 1024 != 1 MiB
-/// 就报错），它会红。**改口径之前先改 `docs/usage.md` 与 `commands/fetch.rs` 的注释**，
+/// 就报错），它会红。**改口径之前先改 `docs/user/usage.md` 与 `commands/fetch.rs` 的注释**，
 /// 别只改代码。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn declared_size_is_a_hint_not_a_check() {

@@ -4,7 +4,7 @@
 > 基线：Rust 1.99.1 · Edition 2024
 >
 > **本文是 v0.4 期的设计任务书，不等于当前实现**（2026-11-22 补）。当前权威在别处：
-> 怎么用 → `README.md` / `docs/usage.md`；改代码不能踩什么 → `AGENTS.md`；
+> 怎么用 → `README.md` / `docs/user/usage.md`；改代码不能踩什么 → `AGENTS.md`；
 > 「为什么这样、放弃了什么」→ `.agents/notes/`；**行为以代码为准**。
 > 本文与那三处冲突时以它们为准。**§3.1 已按现状改写**，其余小节仍是 v0.4 当时的设计记录，未逐节复核。
 
@@ -95,8 +95,8 @@ struct PieceTable {          // 现状：src/piece.rs
 **这条是本设计的核心**：**小文件不分片**——不是偷懒，是 aria2 的默认策略（`min-split-size=20M`），也是 MC 场景的实际情况。
 
 切片策略的两次演进与取舍见
-[片大小耦合](.agents/notes/implemented/architecture/2026-10-27-piece-size-coupled-to-fanout.md) 与
-[页对齐](.agents/notes/implemented/architecture/2026-11-22-piece-page-alignment.md)；
+[片大小耦合](../../.agents/notes/implemented/architecture/2026-10-27-piece-size-coupled-to-fanout.md) 与
+[页对齐](../../.agents/notes/implemented/architecture/2026-11-22-piece-page-alignment.md)；
 **并发数是不是瓶颈**的实测见 `docs/reports/quant-report-20261122.md` 的 E1。
 
 ### 3.2 落点

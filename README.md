@@ -84,6 +84,18 @@ mc-downloader pack "xxx.mrpack" -d "D:/Games/.minecraft"
 
 ---
 
+## 文档地图
+
+| 你想干什么 | 看哪里 |
+|---|---|
+| 装好它、把目录搞对 | 本文的「五分钟上手」 |
+| 查参数/配置键的准确含义 | [docs/user/usage.md](docs/user/usage.md) |
+| 改代码（构建、测试、提交门） | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| 改代码前不能踩什么 | [AGENTS.md](AGENTS.md) |
+| 为什么是现在这样 | [.agents/notes/](.agents/notes/) |
+| 架构与路线 | [docs/design/DESIGN.md](docs/design/DESIGN.md) / [docs/design/ROADMAP.md](docs/design/ROADMAP.md) |
+| 每个版本改了什么 | [CHANGELOG.md](CHANGELOG.md) |
+| 全部文档的索引 | [docs/README.md](docs/README.md) |
 ## 是什么
 
 一个**单文件命令行工具**，解决四件事：
@@ -124,14 +136,14 @@ mc-downloader pack "xxx.mrpack" -d "D:/Games/.minecraft"
 | `--print-config` | 打印**生效值**和它来自哪一层（CLI / 配置文件 / 默认），排查"我改了怎么没用" |
 | `--config <路径>` | 指定配置文件；不给则按平台配置目录找（`--print-config` 会告诉你读的是哪个） |
 | `--conns` / `--jobs` | `--piece-conns` / `--concurrency` 的别名 |
-| `--if-range` | 分片带 `If-Range`：远端中途被换时**当场降级重下**（默认关，见 `docs/usage.md`） |
+| `--if-range` | 分片带 `If-Range`：远端中途被换时**当场降级重下**（默认关，见 `docs/user/usage.md`） |
 | `--require-sha1` | 没有校验和的文件**拒绝下载**（默认关） |
 | `--no-content-disposition` | 不读服务器给的文件名，严格按 URL 决定落点 |
 | `--no-motw` | 不给 `.exe`/`.dll` 打 Mark-of-the-Web（Windows；默认会打） |
 
 > **用于下载你有权下载的文件。** 本工具不判断使用者是否持有相应授权，这一点由使用者自行负责。
 
-**完整教程见 [docs/usage.md](docs/usage.md)** —— 覆盖 `fetch`（下一个文件）、`run`（批量 / 脚本编排）、`probe`（先测再选源），以及六个调优参数（`--concurrency` / `--piece-conns` / `--adaptive` / `--retry` / `--timeout` / `--max-speed`）的实际取舍。下面只给最短的路径。
+**完整教程见 [docs/user/usage.md](docs/user/usage.md)** —— 覆盖 `fetch`（下一个文件）、`run`（批量 / 脚本编排）、`probe`（先测再选源），以及六个调优参数（`--concurrency` / `--piece-conns` / `--adaptive` / `--retry` / `--timeout` / `--max-speed`）的实际取舍。下面只给最短的路径。
 
 ### 下载原版
 
@@ -273,7 +285,7 @@ cargo build --release        # 产物: target/release/mc-downloader.exe（需 Ru
 - 换镜像 = 改配置，不用等我们发版。
 
 判据不是口头承诺：`src/` 里出现任何源地址，CI 会直接红（`grep` 闸门）。
-`docs/usage.md` 的「源：必须先自己配」写了六个键各填什么。
+`docs/user/usage.md` 的「源：必须先自己配」写了六个键各填什么。
 ## 为什么不用启动器的下载功能
 
 > **"把文件放到正确的位置"这一件事**，做成一个可脚本化、可复现、可审计的命令。
@@ -313,9 +325,10 @@ cargo build --release        # 产物: target/release/mc-downloader.exe（需 Ru
 
 以下只陈述可核验的事实，**不附法律结论**：
 
-- **下载来源**：`<你的源>`、`<你的源>`、`<你的源>`、
-  `<你的源>`、`api.curseforge.com`。Forge 的库与 CurseForge 的 302 目标另有
-  **域名白名单校验**，不在名单内的来源会被拒绝或跳过。
+- **下载来源**：**全部由用户在配置的 `[source]` 段提供**（六个键），本工具不内置任何地址。
+  整合包里模组的直链来自整合包 manifest 作者填写的内容，逐文件 SHA1 校验。
+  唯一固定访问的外部服务是 CurseForge API（`api.curseforge.com`，取整合包元数据）；
+  Forge 下载的库另有**基于 `[source]` 推出的域名白名单**，不在名单内的会被拒绝。
 - **不包含、不分发任何游戏内容**；
 - **不提供账号验证绕过或离线破解**；
 - **不启动游戏、不管理账号**——启动交给 PCL / HMCL 这类启动器；

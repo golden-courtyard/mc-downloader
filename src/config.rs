@@ -177,7 +177,7 @@ impl Config {
         {
             anyhow::bail!(
                 "脚本 schema = {s}，本版本只支持 {SUPPORTED_SCHEMA}。\n\
-                 \x20 如果这是更新的脚本，请升级 mc-downloader；如果是更老的，请按 docs/usage.md 迁移。"
+                 \x20 如果这是更新的脚本，请升级 mc-downloader；如果是更老的，请按 docs/user/usage.md 迁移。"
             );
         }
         if self.tasks.is_empty() {

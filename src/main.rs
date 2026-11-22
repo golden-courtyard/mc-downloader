@@ -52,7 +52,7 @@ struct Args {
     #[arg(long, global = true)]
     print_config: bool,
 
-    /// 不给可执行文件打 Mark-of-the-Web（默认会打，见 docs/usage.md）
+    /// 不给可执行文件打 Mark-of-the-Web（默认会打，见 docs/user/usage.md）
     #[arg(long = "no-motw", global = true)]
     no_motw: bool,
 

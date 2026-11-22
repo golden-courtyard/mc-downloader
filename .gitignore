@@ -7,3 +7,6 @@ docs/reports/net_faults-report-*.md
 # Python 字节码不是产物：E1-E6 那轮误把 6 个 .pyc 提交进来了
 __pycache__/
 *.pyc
+
+# 本地工具生成的 spec/工件（含内网地址与 ssh 路径，不入库）
+.codeartsdoer/
