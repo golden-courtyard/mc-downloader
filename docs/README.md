@@ -15,13 +15,16 @@
 | 接下来打算做什么 | [design/archive/](design/archive/) |
 | 某个版本改了什么 | [CHANGELOG.md](../CHANGELOG.md) |
 | 要发一个版本 | [dev/release.md](dev/release.md) |
+| 平台范围（Windows / Linux / macOS） | [design/platform-scope.md](design/platform-scope.md) |
+| 测试设施（云服务器 / Kali / Docker） | [dev/testing-infrastructure.md](dev/testing-infrastructure.md) |
+| 网络故障实测记录 | [reports/net_faults-report-20261021.md](reports/net_faults-report-20261021.md) |
 
 ## 目录
 
 ```
 docs/
   user/        给使用者的：怎么用、参数含义、排错
-  dev/         给维护者的：发布流程
+  dev/         给维护者的：发布流程、测试设施
   design/      架构（architecture.md）与已完稿的任务书归档（archive/）
   reports/     实验与审查产物（定量报告、攻击面、平台能力、代码审查）
 ```
