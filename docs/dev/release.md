@@ -47,21 +47,18 @@ GitHub 的报错只有一句 "This run likely failed because of a workflow file 
 2026-11-23 因为这一条连推两次红。
 
 
-### 静态扫描（CodeQL）：试过，当前不可用
+### 静态扫描（CodeQL）：已启用
 
-2026-11-23 加过 `.github/workflows/codeql.yml`（`languages: rust`、`build-mode: none`、v4 动作、含 `actions: read`），
-CI 上两次都失败，最终原因很明确：
+2026-11-23 加过、失败过、又加回来了，过程值得记：
 
-```
-Advanced Security must be enabled for this repository to use code scanning.
-```
+1. 私有仓上两次失败，最终原因：`Advanced Security must be enabled for this repository to use code scanning.`
+   —— 代码扫描要 GitHub Advanced Security，**公开仓免费、私有仓要授权**；
+2. 于是给 workflow 加了一个按仓库可见性开的门：`if: ${{ !github.event.repository.private }}`，
+   私有期间整 job 跳过（run 仍是绿色，不是假门禁）；
+3. 仓库转公开后手动触发一次：**`analyze => success`**，门自动打开。
 
-即 **代码扫描需要 GitHub Advanced Security**，而本仓库是**私有**的。GitHub 的规则是代码扫描对**公开仓库免费**，
-私有仓库要 GHAS 授权。所以：
-
-- **现在不启用**，workflow 已删除 —— 不留红门禁，也不留 `continue-on-error` 的假门禁；
-- **仓库转公开后再加**：把原 YAML 放回去即可（内容记录在 issue #17 的评论里）；
-  能用之后它是第四类检查（安全），与 `cargo-deny` 的依赖面互补（CodeQL 看代码，deny 看依赖树）。
+现在它是第四类检查（安全），与 `cargo-deny` 互补：CodeQL 看**代码**，deny 看**依赖树**。
+触发：push / PR / 每周一 / 手动。
 
 ## 4 推送后真的看 CI
 
