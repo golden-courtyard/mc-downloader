@@ -96,6 +96,7 @@ mc-downloader fetch "https://example.com/big.zip" -d "D:/Downloads" --force
 | `--force` | 目标已存在时覆盖 | **默认拒绝**：报错退出（退出码 1），不覆盖也不跳过 |
 | `-s, --size` | 已知大小 | **只影响"分片还是单流"，不影响能否下载** |
 | `--mirror` | 额外镜像 URL，可重复 | 单源 |
+| `--no-content-disposition` | 不读服务器给的文件名 | 想严格按 URL 决定落点 |
 
 **`--force` 为什么是必要的**（而不是默认覆盖或默认跳过）：`fetch` 的 `sha1` 为空，
 而下载引擎对"同名已存在 + 无 sha1"的判定是**当作已完成直接跳过** ——
@@ -107,6 +108,9 @@ mc-downloader fetch "https://example.com/big.zip" -d "D:/Downloads" --force
 **`-s` 为什么可以不给**：不给时先发 `HEAD` 探测大小；探测不到（服务器用 `Transfer-Encoding: chunked`）就**走单流下到 EOF**——照常下完，只是没法分片，大文件会慢一些。
 
 **什么时候值得给 `-s`**：URL 带重定向或查询串、`HEAD` 返回 405、或者你已经知道确切字节数。给了就跳过探测这一步。
+
+**落地名优先级**：`--name` > `Content-Disposition`（服务器给的，过 `pathsafe`）> URL 末段 > `out.bin`。
+服务器给的名字和 URL 一样**不可信** —— `filename="../../evil"` 会被拒绝并回落，测试钉住了这条。
 
 **`--mirror` 的正确用法**：内容必须与主 `url` **完全相同**。填错了不会报错，只会拿到坏文件（SHA1 校验能发现，但那是很久以后）。先用 `probe` 确认，见第四节。
 

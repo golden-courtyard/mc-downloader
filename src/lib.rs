@@ -8,6 +8,7 @@ pub mod curseforge;
 pub mod download;
 pub mod fabric;
 pub mod forge;
+pub mod httpname;
 pub mod manifest;
 pub mod motw;
 pub mod neoforge;

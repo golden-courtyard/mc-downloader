@@ -26,16 +26,49 @@ pub async fn run(
     name: Option<String>,
     force: bool,
     mirrors: Vec<String>,
+    no_content_disposition: bool,
     ctx: &Ctx,
 ) -> Result<()> {
+    let client = download::client(&ctx.opts)?;
+
+    // 名字优先级（issue #16）：`--name` > `Content-Disposition` > URL 末段 > `out.bin`
+    //
+    // 为什么要多发一次 HEAD：`Content-Disposition` 是"服务器决定文件名"的标准手段，
+    // 而我们此前**完全不读**它。只在**用户没给 `--name`** 时才去问这一次（给了名字就没必要），
+    // 而 `--size` 也没给时本来就要发 HEAD —— 两件事共用一个响应。
+    let mut cd_name: Option<String> = None;
+    let mut head_size: Option<u64> = None;
+    if name.is_none() && (!no_content_disposition || size.is_none()) {
+        match client.head(&url).send().await {
+            Ok(resp) => {
+                if size.is_none() {
+                    head_size = download::header_content_length(&resp);
+                }
+                if !no_content_disposition {
+                    cd_name = resp
+                        .headers()
+                        .get(reqwest::header::CONTENT_DISPOSITION)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(mc_downloader::httpname::filename_from_content_disposition);
+                }
+            }
+            // HEAD 不支持（405/501）或网络抖动都不该让下载失败：回落 URL 推导
+            Err(e) => eprintln!("[!] HEAD 探测失败（{e}），落地名按 URL 推导"),
+        }
+    }
+    let size_from_url = size.or(head_size);
+
     // 名字推导只有一份实现（lib 的 `job_from_url`），`run` 也走它
     let (job, fell_back) = url_list::job_from_url(
         &url,
-        name.as_deref(),
-        size.map_or(SizeHint::Unknown, SizeHint::Hint),
+        name.as_deref().or(cd_name.as_deref()),
+        size_from_url.map_or(SizeHint::Unknown, SizeHint::Hint),
         mirrors.clone(),
     );
     let name = job.path.clone();
+    if cd_name.is_some() && name == *cd_name.as_deref().unwrap_or("") {
+        println!("[*] 落地名取自 Content-Disposition（服务器给的；--name 可以覆盖它）");
+    }
     if fell_back {
         eprintln!("[!] 这个 URL 推不出文件名（以 `/` 结尾，或只有主机名）");
         eprintln!("[!] 落地名回落为 out.bin —— 想指定名字请加 --name");
@@ -57,14 +90,7 @@ pub async fn run(
         tokio::fs::remove_file(&dst).await?;
     }
 
-    let client = download::client(&ctx.opts)?;
-    let size = match size {
-        Some(s) => Some(s),
-        None => {
-            let resp = client.head(&url).send().await?;
-            download::header_content_length(&resp)
-        }
-    };
+    let size = size_from_url;
     println!("[*] URL  : {url}");
     println!("[*] 落地 : {}", dst.display());
     match size {

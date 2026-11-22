@@ -113,6 +113,9 @@ enum Cmd {
         /// 额外镜像 URL（可重复，内容须与 url 相同）
         #[arg(long = "mirror")]
         mirrors: Vec<String>,
+        /// 不读 Content-Disposition（默认会读：服务器给的文件名优先于 URL 末段）
+        #[arg(long = "no-content-disposition")]
+        no_content_disposition: bool,
     },
     /// 探测多个 URL 的真实下载速度（串行各测 N 秒），用来决定 mirrors 填哪个
     ///
@@ -253,8 +256,19 @@ async fn main() -> Result<()> {
             name,
             force,
             mirrors,
+            no_content_disposition,
         } => {
-            commands::fetch::run(url, dir, size, name, force, mirrors, &ctx).await?;
+            commands::fetch::run(
+                url,
+                dir,
+                size,
+                name,
+                force,
+                mirrors,
+                no_content_disposition,
+                &ctx,
+            )
+            .await?;
         }
         Cmd::Probe { urls, seconds } => {
             commands::probe::run(urls, seconds, &ctx).await?;
