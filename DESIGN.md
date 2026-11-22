@@ -97,7 +97,7 @@ struct PieceTable {          // 现状：src/piece.rs
 切片策略的两次演进与取舍见
 [片大小耦合](.agents/notes/implemented/architecture/2026-10-27-piece-size-coupled-to-fanout.md) 与
 [页对齐](.agents/notes/implemented/architecture/2026-11-22-piece-page-alignment.md)；
-**并发数是不是瓶颈**的实测见 `quant-report-20261122.md` 的 E1。
+**并发数是不是瓶颈**的实测见 `docs/reports/quant-report-20261122.md` 的 E1。
 
 ### 3.2 落点
 
