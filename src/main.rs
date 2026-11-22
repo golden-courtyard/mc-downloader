@@ -56,6 +56,10 @@ struct Args {
     #[arg(long = "no-motw", global = true)]
     no_motw: bool,
 
+    /// 分片请求带 `If-Range`（默认关；只在同一个源内生效，见 #7 的讨论）
+    #[arg(long = "if-range", global = true)]
+    if_range: bool,
+
     /// 子命令（`--print-config` 时可以不写）
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -164,7 +168,9 @@ async fn main() -> Result<()> {
         // 命令行与脚本都不承载源：源属于"这台机器上有什么"（issue #15）
         source: settings::SourceSettings::default(),
     };
-    let merged = settings::merge(&[("cli", &cli_layer), ("config", &loaded.settings)], &dflt);
+    let mut merged = settings::merge(&[("cli", &cli_layer), ("config", &loaded.settings)], &dflt);
+    // `--if-range` 不进配置文件：它是"这次要不要冒险"的选择，不是机器默认值
+    merged.opts.if_range = args.if_range;
     if args.print_config {
         let src = match &loaded.path {
             Some(p) => p.display().to_string(),

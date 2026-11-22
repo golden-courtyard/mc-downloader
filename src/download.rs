@@ -61,6 +61,12 @@ pub struct DownloadOpts {
     /// 默认 `true`：浏览器下载会给文件打 MotW，我们 `fs::write` 出来的文件没有它，
     /// 等于让 SmartScreen 在用户双击时不报警。非 Windows 上是 no-op。
     pub motw: bool,
+    /// 分片请求是否带 `If-Range`（默认关）。
+    ///
+    /// 打开后对**同一个源**的后续分片带上首个响应的强验证器：
+    /// 远端若在中途换掉，服务器会回 200（整份）⇒ 我们按既有逻辑降级成单流重下，
+    /// 而不是把两代内容拼成一个坏文件。**默认关**：多镜像 ETag 不一致会误判死（见 #7 的讨论）。
+    pub if_range: bool,
 }
 
 impl Default for DownloadOpts {
@@ -75,6 +81,7 @@ impl Default for DownloadOpts {
             continue_on_error: false,
             max_speed: None,
             motw: true,
+            if_range: false,
         }
     }
 }
@@ -601,6 +608,10 @@ async fn one_split(
     let gate = opts.adaptive.then(|| Arc::new(AdaptiveGate::new(conns)));
     let sem = (!opts.adaptive).then(|| Arc::new(tokio::sync::Semaphore::new(conns)));
 
+    // `--if-range` 才建验证器缓存；默认 None ⇒ 连一次加锁都没有
+    let validators: Option<Arc<tokio::sync::Mutex<std::collections::HashMap<usize, String>>>> =
+        opts.if_range
+            .then(|| Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())));
     let retries = opts.retries;
     // 后台任务一律交给 `TaskGroup`：早退（含 `?`）时余下的 worker 会被 Drop 逐个 abort，
     // 不会变成孤儿继续写 `.part`。
@@ -615,6 +626,7 @@ async fn one_split(
         let sem = sem.clone();
         let gate = gate.clone();
         let tbl = table.clone();
+        let validators = validators.clone();
         workers.push(tokio::spawn(async move {
             while let Some(pj) = s.next().await {
                 // adaptive：先在闸门里占一个槽（budget 由 tuner 动态调整）；非 adaptive 走 Semaphore。
@@ -635,7 +647,15 @@ async fn one_split(
                 // 不留档的话最终报错只剩"无可用源"，用户会以为是网络（审查 D1）。
                 let mut prev: Option<String> = None;
                 loop {
-                    match fetch_piece(&c, &pj, &t, expect_total, &pg, &pool, &mut tried).await {
+                    let pctx = PieceCtx {
+                        client: &c,
+                        path: &t,
+                        expect_total,
+                        pg: &pg,
+                        pool: &pool,
+                        validators: validators.as_ref(),
+                    };
+                    match fetch_piece(&pj, &pctx, &mut tried).await {
                         Ok(()) => {
                             tbl.lock().await.mark_done(pj.piece_idx);
                             break;
@@ -983,15 +1003,46 @@ impl std::error::Error for RangeUnsupported {}
 ///
 /// `expect_total` 是**权威**总长：只有它参与 `Content-Range` 比对，抓"远端对象中途被换掉"。
 /// 用户给的提示（`--size`）不该走到这里 —— 它就是 C1 那条 bug 的来源。
-async fn fetch_piece(
-    client: &reqwest::Client,
-    pj: &PieceJob,
-    path: &Path,
+///
+/// 入参收进 [`PieceCtx`] 是因为到这里已经是 7 个（clippy 上限），
+/// 再加 `If-Range` 需要的验证器缓存必然爆表 —— 先重构再塞功能，顺序不能反。
+struct PieceCtx<'a> {
+    client: &'a reqwest::Client,
+    path: &'a Path,
+    /// 权威总长；`None` = 不知道原本多大，只校验格式不比对
     expect_total: Option<u64>,
-    pg: &Arc<Progress>,
-    pool: &Arc<SourcePool>,
-    tried: &mut Vec<usize>,
-) -> Result<()> {
+    pg: &'a Arc<Progress>,
+    pool: &'a Arc<SourcePool>,
+    /// `--if-range` 打开时才是 `Some`：按**源**缓存强验证器（`source_idx -> ETag/Last-Modified`）。
+    ///
+    /// 为什么按源存：多镜像各自算 ETag，拿 A 的 ETag 去请求 B 必然不匹配 ⇒ 服务器回 200 ⇒
+    /// 我们会按既有逻辑降级成单流，等于把"能用但慢"的镜像判死。所以只对**同一个源**发条件。
+    validators: Option<&'a Arc<tokio::sync::Mutex<std::collections::HashMap<usize, String>>>>,
+}
+
+/// 选一个能用于 `If-Range` 的**强**验证器。
+///
+/// RFC 9110 §13.1.5：`If-Range` 只接受强验证器；弱 ETag（`W/"…"`）不行。
+/// 优先级：强 ETag > `Last-Modified` > 都没有（不发这个头）。
+fn strong_validator(etag: Option<&str>, last_modified: Option<&str>) -> Option<String> {
+    if let Some(e) = etag {
+        let e = e.trim();
+        if !e.is_empty() && !e.starts_with("W/") && !e.starts_with("w/") {
+            return Some(e.to_string());
+        }
+    }
+    last_modified
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+async fn fetch_piece(pj: &PieceJob, ctx: &PieceCtx<'_>, tried: &mut Vec<usize>) -> Result<()> {
+    let client = ctx.client;
+    let path = ctx.path;
+    let expect_total = ctx.expect_total;
+    let pg = ctx.pg;
+    let pool = ctx.pool;
     // 每次尝试都现选源：`tried` 为空时等价于 `pick()`（轮转 + 择优）。
     // 这样前几片记录的 ewma 才能影响后几片的选择 —— 建 job 时选死就学不到东西。
     // 只抛标记类型、不在这儿加 context：外层重试循环会补上「分片 N 无可用源」，
@@ -1009,14 +1060,18 @@ async fn fetch_piece(
     // 请求与校验共用同一个开→闭换算，避免两处各自 `pj.end - 1` 而漂移
     let (req_start, req_end_incl) = byte_range(pj.start, pj.end);
 
-    let resp = client
-        .get(&url)
-        .header(
-            reqwest::header::RANGE,
-            format!("bytes={req_start}-{req_end_incl}"),
-        )
-        .send()
-        .await?;
+    let mut req = client.get(&url).header(
+        reqwest::header::RANGE,
+        format!("bytes={req_start}-{req_end_incl}"),
+    );
+    // `--if-range`：只对**同一个源**发条件（见 `PieceCtx::validators` 的注释）
+    if let Some(v) = &ctx.validators {
+        let cached = v.lock().await.get(&idx).cloned();
+        if let Some(validator) = cached {
+            req = req.header(reqwest::header::IF_RANGE, validator);
+        }
+    }
+    let resp = req.send().await?;
 
     if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
         let status = resp.status();
@@ -1074,6 +1129,23 @@ async fn fetch_piece(
         pool.record_failure(idx);
         return Err(e)
             .with_context(|| format!("分片 {} 的 Content-Range 校验失败: {url}", pj.piece_idx));
+    }
+
+    // 206 已通过校验：把**本源的**强验证器记下来，供后续分片发 `If-Range`。
+    // 只在 `--if-range` 时做（`validators` 为 None 就一次都不加锁）。
+    if let Some(v) = &ctx.validators {
+        let etag = resp
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|h| h.to_str().ok());
+        let last_modified = resp
+            .headers()
+            .get(reqwest::header::LAST_MODIFIED)
+            .and_then(|h| h.to_str().ok());
+        if let Some(validator) = strong_validator(etag, last_modified) {
+            // 首片赢：同一个源的验证器不该在下载中途被后到的响应改掉
+            v.lock().await.entry(idx).or_insert(validator);
+        }
     }
 
     let expect = (pj.end - pj.start) as usize;
@@ -1226,6 +1298,27 @@ mod tests {
         assert!(client(&ok).is_ok());
     }
 
+    /// `If-Range` 只接受**强**验证器（RFC 9110 §13.1.5）：弱 ETag 不行，得退 `Last-Modified`。
+    #[test]
+    fn strong_validator_prefers_strong_etag_then_last_modified() {
+        assert_eq!(
+            strong_validator(Some("\"abc123\""), None).as_deref(),
+            Some("\"abc123\"")
+        );
+        // 弱 ETag 不能用于 If-Range ⇒ 退 Last-Modified
+        assert_eq!(
+            strong_validator(Some("W/\"weak\""), Some("Wed, 21 Oct 2026 07:28:00 GMT")).as_deref(),
+            Some("Wed, 21 Oct 2026 07:28:00 GMT")
+        );
+        // 只有弱 ETag、没有 Last-Modified ⇒ 宁可不发这个头
+        assert_eq!(strong_validator(Some("W/\"weak\""), None), None);
+        assert_eq!(strong_validator(None, None), None);
+        // 空白 ETag 当成没有
+        assert_eq!(
+            strong_validator(Some("   "), Some("x")).as_deref(),
+            Some("x")
+        );
+    }
     /// 416 的 `Content-Range: bytes */N` —— 只认 `*` 形式，其它一律当"没给"。
     #[test]
     fn unsatisfied_total_only_accepts_the_star_form() {
