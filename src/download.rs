@@ -367,6 +367,103 @@ async fn one_stream(
     Ok(())
 }
 
+/// 一组后台任务，**`Drop` 时逐个 abort**。
+///
+/// 为什么不用裸 `Vec<JoinHandle<_>>`：`JoinHandle::drop` 是 **detach**，不是 abort。
+/// 收尾时 `pop()` 拿到一个失败的 worker 就 `break`，余下的 handle 一 drop 就变成孤儿 ——
+/// 它们会继续往 `.part` 里写、继续记进度；而 `one_with_retry` 会再进一次 `one_split`，
+/// 于是**两代 worker 同时写同一个文件**（默认 retries=3 ⇒ 最多 4 代）。
+///
+/// 收尾循环用 [`TaskGroup::pop`] 取出的 handle 不再受本结构保护（由调用方负责 await），
+/// 只有"没人管的"才会在 Drop 里被 abort —— 这正是要的语义。
+struct TaskGroup<T> {
+    handles: Vec<tokio::task::JoinHandle<T>>,
+}
+
+impl<T> TaskGroup<T> {
+    fn new() -> Self {
+        Self {
+            handles: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, h: tokio::task::JoinHandle<T>) {
+        self.handles.push(h);
+    }
+
+    /// 取出一个由调用方 await；取出的不再被 Drop abort。
+    fn pop(&mut self) -> Option<tokio::task::JoinHandle<T>> {
+        self.handles.pop()
+    }
+
+    /// 显式掐掉余下的（**顺序敏感**的地方必须调它，别指望 Drop 的时机）。
+    fn abort_all(&self) {
+        for h in &self.handles {
+            h.abort();
+        }
+    }
+}
+
+impl<T> Drop for TaskGroup<T> {
+    fn drop(&mut self) {
+        self.abort_all();
+    }
+}
+
+/// AIMD 闸门：`acquire()` 给出一个 permit，**drop 时释放槽位**。
+///
+/// 手写 `fetch_add`/`fetch_sub` 的版本只有一个释放点（worker 循环末尾），一旦 worker 在
+/// `acquire` 的自旋里被 abort（`inflight` 已 +1 却没人减），存活 worker 会全部卡在自旋里 ——
+/// 这不是理论问题：只要收尾路径改成"任何错误都 abort 余下 worker"，它立刻可触发。
+struct AdaptiveGate {
+    budget: AtomicUsize,
+    inflight: AtomicUsize,
+}
+
+impl AdaptiveGate {
+    fn new(cap: usize) -> Self {
+        Self {
+            budget: AtomicUsize::new(cap),
+            inflight: AtomicUsize::new(0),
+        }
+    }
+
+    /// tuner 写、worker 只读
+    fn set_budget(&self, v: usize) {
+        self.budget.store(v, Ordering::Relaxed);
+    }
+
+    fn budget(&self) -> usize {
+        self.budget.load(Ordering::Relaxed)
+    }
+
+    fn inflight(&self) -> usize {
+        self.inflight.load(Ordering::Relaxed)
+    }
+
+    async fn acquire(self: &Arc<Self>) -> GatePermit {
+        loop {
+            let cap = self.budget();
+            if self.inflight.fetch_add(1, Ordering::Relaxed) < cap {
+                return GatePermit { gate: self.clone() };
+            }
+            self.inflight.fetch_sub(1, Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+}
+
+/// 闸门槽位。**唯一**的释放途径是 `Drop` —— 任何提前 return / abort / panic 都会走到它。
+struct GatePermit {
+    gate: Arc<AdaptiveGate>,
+}
+
+impl Drop for GatePermit {
+    fn drop(&mut self) {
+        self.gate.inflight.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// 分片下载：Range GET + 按偏移写同一临时文件。
 ///
 /// Windows 没有 `pwrite`，所以每个分片**独立打开一次文件句柄**再 seek+write
@@ -470,8 +567,8 @@ async fn one_split(
         "[*] 分片：{n_pieces} 片 · 实际并发 {conns}（配置 {}；片大小 {piece_size} 字节）",
         opts.piece_conns
     );
-    // 自适应模式：worker 数按上限开，实际并发由 Semaphore 控制
-    let workers = if opts.adaptive {
+    // 自适应模式：worker 数按上限开，实际并发由闸门控制
+    let workers_n = if opts.adaptive {
         (conns * 2).min(n_pieces).max(1)
     } else {
         conns
@@ -480,17 +577,15 @@ async fn one_split(
     // —— tokio 的 `forget_permits` 只能减「空闲」许可（`batch_semaphore.rs:411` 饱和相减），
     //    而稳态下 workers(2×conns) > permits(conns) 使 avail 恒为 0，减半分支因此永远减不动。
     // 非 adaptive：路径保持原样，仍用 Semaphore。
-    let gate = opts.adaptive.then(|| {
-        (
-            Arc::new(AtomicUsize::new(conns)),
-            Arc::new(AtomicUsize::new(0)),
-        )
-    });
+    let gate = opts.adaptive.then(|| Arc::new(AdaptiveGate::new(conns)));
     let sem = (!opts.adaptive).then(|| Arc::new(tokio::sync::Semaphore::new(conns)));
 
     let retries = opts.retries;
-    let mut handles = Vec::new();
-    for _ in 0..workers {
+    // 后台任务一律交给 `TaskGroup`：早退（含 `?`）时余下的 worker 会被 Drop 逐个 abort，
+    // 不会变成孤儿继续写 `.part`。
+    let mut workers: TaskGroup<Result<()>> = TaskGroup::new();
+    let mut bg: TaskGroup<()> = TaskGroup::new();
+    for _ in 0..workers_n {
         let s = sched.clone();
         let c = client.clone();
         let t = tmp.clone();
@@ -499,21 +594,16 @@ async fn one_split(
         let sem = sem.clone();
         let gate = gate.clone();
         let tbl = table.clone();
-        handles.push(tokio::spawn(async move {
+        workers.push(tokio::spawn(async move {
             while let Some(pj) = s.next().await {
-                // adaptive：先在闸门里占一个槽（budget 由 tuner 动态调整）；非 adaptive 走 Semaphore
-                if let Some((b, n)) = &gate {
-                    loop {
-                        let cap = b.load(Ordering::Relaxed);
-                        if n.fetch_add(1, Ordering::Relaxed) < cap {
-                            break;
-                        }
-                        n.fetch_sub(1, Ordering::Relaxed);
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                    }
-                }
-                let _permit = match &sem {
-                    Some(sm) => sm.acquire().await.ok(),
+                // adaptive：先在闸门里占一个槽（budget 由 tuner 动态调整）；非 adaptive 走 Semaphore。
+                // 两者都是 RAII：无论成功、失败还是被 abort，槽位都会在本次迭代结束时释放。
+                let _gate_permit = match &gate {
+                    Some(g) => Some(g.acquire().await),
+                    None => None,
+                };
+                let _sem_permit = match &sem {
+                    Some(sm) => sm.clone().acquire_owned().await.ok(),
                     None => None,
                 };
                 // 本分片已试过的源：**每片一份**，重试时据此换源（不能提到 one_split 里共享）
@@ -547,10 +637,7 @@ async fn one_split(
                         }
                     }
                 }
-                // 闸门槽只在这一处释放 —— 两个失败出口 + 成功出口共用它
-                if let Some((_, n)) = &gate {
-                    n.fetch_sub(1, Ordering::Relaxed);
-                }
+                // 闸门槽与信号量许可都由 RAII 在本次迭代结束时释放（见 _gate_permit / _sem_permit）
                 if let Some(e) = fatal {
                     return Err(e);
                 }
@@ -558,12 +645,11 @@ async fn one_split(
             Ok::<_, anyhow::Error>(())
         }));
     }
-    // 同上：不是「有/无闸门两种分支」，而是「有 gate 才派调参任务」
-    let tuner = gate.as_ref().map(|(b, n)| {
-        let b = b.clone();
-        let n = n.clone();
+    // 同上：不是有/无闸门两种分支，而是有 gate 才派调参任务；它和 flusher 同属 bg 组，由 abort_all 一起收
+    if let Some(g) = gate.as_ref() {
+        let g = g.clone();
         let pg2 = pg.clone();
-        tokio::spawn(async move {
+        bg.push(tokio::spawn(async move {
             // 3 个 tick 内下不来一片 ⇒ AIMD 的调节粒度已大于响应窗口。
             // 改 TICK 必须同步改这里（`Duration::as_secs_f64` 不是 const fn，故写字面量）。
             const TICK: Duration = Duration::from_secs(2);
@@ -612,7 +698,7 @@ async fn one_split(
                             eprintln!("[tune] act=disabled reason={reason}");
                         }
                         // 任务就此结束：不再 add/cut，并发停在 conns。
-                        // 收尾处的 `tuner.abort()` 对已结束任务是 no-op（harness.rs:118
+                        // 收尾处的 `bg.abort_all()` 对已结束任务是 no-op（harness.rs:118
                         // `remote_abort` 的状态迁移失败即返回），这里并没有"取消"逻辑。
                         return;
                     }
@@ -623,7 +709,7 @@ async fn one_split(
 
                 let mut act: &str = "hold";
                 let mut take = 0usize;
-                if delta > last_delta && budget < workers {
+                if delta > last_delta && budget < workers_n {
                     budget += 1;
                     act = "add";
                 } else if delta * 4 < last_delta * 3 && budget > 1 && t - last_cut >= 2 {
@@ -636,26 +722,28 @@ async fn one_split(
                     last_cut = t;
                     act = "cut";
                 }
-                b.store(budget, Ordering::Relaxed);
+                g.set_budget(budget);
                 // 诊断输出（design §1.3 D6）：只读，不参与任何判断，无环境变量时零行为差异
                 if std::env::var_os("MC_TUNE_LOG").is_some() {
                     eprintln!(
                         "[tune] act={act} budget={budget} take={take} inflight={} delta={delta} last={last_delta}",
-                        n.load(Ordering::Relaxed)
+                        g.inflight()
                     );
                 }
                 last_delta = delta;
             }
-        })
-    });
+        }));
+    }
 
     // 位图落盘：每 2 秒快照一次。
     // 崩溃最多丢 2 秒的进度（重下几片），不值得为每一片做一次同步写。
-    let flusher = {
+    {
         let p = tmp.clone();
         let tbl = table.clone();
-        tokio::spawn(async move {
+        bg.push(tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(2));
+            // 观察型 tick：一次落盘卡过 2 秒时别"补发"一串（Burst 会自己放大自己）
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             tick.tick().await;
             loop {
                 tick.tick().await;
@@ -667,14 +755,15 @@ async fn one_split(
                     Err(e) => eprintln!("[!] 进度状态任务失败: {e}"),
                 }
             }
-        })
-    };
+        }));
+    }
 
-    // 逐个收 worker。用 `pop()` 而不是 `for`：出错时**余下的 handle 必须还在 Vec 里**，
-    // 否则 `break` 会把它们 drop 掉（JoinHandle 的 drop 是 detach，不是 abort），
-    // 那些 worker 会继续往 `.part` 里写 —— 而降级分支正要截断这个文件重下。
+    // 逐个收 worker。用 `pop()` 而不是 `for`：**取出**的 handle 由这里负责 await，
+    // 仍在 `workers` 里的则在 `break` 后由 `TaskGroup::drop` 逐个 abort
+    // （裸 `JoinHandle::drop` 是 detach 不是 abort —— 那些 worker 会继续往 `.part` 里写，
+    //   而降级分支正要截断这个文件重下）。
     let mut worker_err: Option<anyhow::Error> = None;
-    while let Some(h) = handles.pop() {
+    while let Some(h) = workers.pop() {
         match h.await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
@@ -687,10 +776,7 @@ async fn one_split(
             }
         }
     }
-    if let Some(t) = tuner {
-        t.abort();
-    }
-    flusher.abort();
+    bg.abort_all();
     if let Some(e) = worker_err {
         // 降级：服务器对 Range 回 200（整份）⇒ 退回单流，而不是把整批判失败。
         //
@@ -698,9 +784,9 @@ async fn one_split(
         // 截断 `.part`（它从头写）；否则晚到的分片写会把新流搅坏。
         // 已计的字节要拨回去（本次下载从 0 重来），否则进度会超过总量。
         if e.downcast_ref::<RangeUnsupported>().is_some() {
-            for h in &handles {
-                h.abort();
-            }
+            // 显式 abort：`return one_stream(...).await` 会**先**把 future 跑完再 drop 本地变量，
+            // 所以这里不能指望 `TaskGroup::drop` 的时机。
+            workers.abort_all();
             pg.reset_to(done_before);
             PieceState::remove(&tmp);
             println!("[*] 服务器对 Range 回 200（整份），已退回单流下载");
@@ -962,6 +1048,61 @@ async fn fetch_piece(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `TaskGroup` 的 Drop 必须 **abort**，不是 detach。
+    ///
+    /// 这条防的是审查里的 E2：收尾时 `pop()` 拿到失败的 worker 就 `break`，余下的 handle
+    /// 一 drop 就 detach ⇒ 孤儿 worker 继续写 `.part`，而重试会再进一次 `one_split`，
+    /// 两代 worker 同时写同一个文件。
+    #[tokio::test]
+    async fn task_group_aborts_on_drop() {
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let mut g: TaskGroup<()> = TaskGroup::new();
+        {
+            let t = ticks.clone();
+            g.push(tokio::spawn(async move {
+                loop {
+                    t.fetch_add(1, Ordering::Relaxed);
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }));
+        }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert!(ticks.load(Ordering::Relaxed) > 0, "任务应当已经跑起来");
+        drop(g);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let after_drop = ticks.load(Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(
+            after_drop,
+            ticks.load(Ordering::Relaxed),
+            "Drop 之后任务必须停 —— 计数还在涨说明它被 detach 了"
+        );
+    }
+
+    /// 闸门槽位必须在 `Drop` 与**被 abort** 两种情况下都还回来。
+    ///
+    /// 后一种是手写 `fetch_add`/`fetch_sub` 版本漏掉的：worker 挂在 `acquire` 的自旋里被 abort 时
+    /// `inflight` 已经 +1，没人减 ⇒ 存活 worker 全部卡死。改成 RAII 之后它结构上不可能发生。
+    #[tokio::test]
+    async fn gate_permit_is_released_on_drop_and_on_abort() {
+        let gate = Arc::new(AdaptiveGate::new(1));
+        let p = gate.acquire().await;
+        assert_eq!(gate.inflight(), 1);
+        drop(p);
+        assert_eq!(gate.inflight(), 0, "正常释放");
+
+        let g2 = gate.clone();
+        let h = tokio::spawn(async move {
+            let _p = g2.acquire().await;
+            std::future::pending::<()>().await;
+        });
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(gate.inflight(), 1, "任务已占住槽位");
+        h.abort();
+        let _ = h.await;
+        assert_eq!(gate.inflight(), 0, "被 abort 之后槽位也必须还回来");
+    }
 
     #[test]
     fn default_opts_are_sane() {
