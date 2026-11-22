@@ -60,6 +60,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 
+      - name: cargo-deny（许可证 / RustSec 公告 / 只从 crates.io 取依赖）
+        # 这一步不看业务代码，只看**依赖树**：许可证是否在白名单里、有没有已知公告、
+        # 有没有从 git 或私有源取的包。issue #17 建议 5。
+        uses: EmbarkStudios/cargo-deny-action@v2
+
       # 为什么不用 services：service 的容器里建监听，runner 连不到那个端口（用例要动态建 proxy、端口随机）。
       # 直接在 runner 本机跑二进制最省事；起不来就整步失败，不让用例"静默跳过"。
       - name: Start toxiproxy

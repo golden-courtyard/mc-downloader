@@ -12,7 +12,10 @@ rust-version = "1.99"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
+# 用 rustls 而不是 native-tls：前者不依赖系统 OpenSSL（Linux 上不再需要 libssl-dev，
+# 发布物也更可控）；native-tls 在 Windows 走 schannel、在 Linux 走 OpenSSL，行为不一致。
+# 这条是 cargo-deny 的 `bans` 判据逼出来的（issue #17）。
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.10"

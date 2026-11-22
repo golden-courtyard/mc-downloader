@@ -1,0 +1,32 @@
+# cargo-deny 配置（issue #17 建议 5）
+#
+# 三件事：许可证合规、RustSec 公告、以及"只从 crates.io 取依赖"。
+# 目标是**把'这个依赖是什么许可证'变成机器判据**，不是把名单堆宽。
+
+[advisories]
+# 有安全公告就红；临时忽略必须写在这里并给出理由（见下面的 ignore 示例注释）
+
+[licenses]
+# 只允许宽松/常见的许可证。遇到新的先看它到底是什么，再决定加不加。
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "CC0-1.0",
+  "MPL-2.0",
+  # Mozilla 的根证书数据包（webpki-roots，数据不是代码），permissive
+  "CDLA-Permissive-2.0",
+]
+
+[bans]
+# 我们走 rustls，不该出现 openssl 的绑定
+deny = [{ name = "openssl-sys" }]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -273,6 +273,30 @@ impl StallGuard {
         Ok(())
     }
 }
+
+/// 退避时长：`2^attempt` 秒 + `[0, 500ms)` 抖动。
+///
+/// 为什么要有抖动：`1 << attempt` 是**固定值**，多个分片同时失败时会在同一秒一起重试
+/// （issue #17 指出的正反馈），瞬时并发翻倍 → 服务器更慢 → 更多失败。抖动把重试时刻打散。
+///
+/// 为什么不用 `rand`：这里要的只是"彼此错开"，不需要密码学随机；系统时间的纳秒位当熵源就够，
+/// 也省一个依赖。`seed` 由调用方给（混入分片序号），于是 `backoff_delay(a, s)` 是纯函数、可测。
+fn backoff_delay(attempt: u32, seed: u64) -> Duration {
+    // 2^attempt 秒；attempt 很大时封顶 60s，避免移位溢出或睡到天荒地老
+    let base = 1u64.checked_shl(attempt).unwrap_or(u64::MAX).min(60);
+    let jitter_ms = seed % 500;
+    Duration::from_secs(base) + Duration::from_millis(jitter_ms)
+}
+
+/// 给某次重试取一个熵源：纳秒低位再混入分片序号。
+fn backoff_seed(piece: usize) -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    nanos ^ (piece as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+}
+
 fn part_path(dst: &Path) -> PathBuf {
     let ext = dst
         .extension()
@@ -378,7 +402,7 @@ async fn one_with_retry(
                 if attempt >= opts.retries {
                     return Err(e.context(format!("{} 重试 {} 次仍失败", job.path, opts.retries)));
                 }
-                tokio::time::sleep(Duration::from_secs(1u64 << attempt)).await;
+                tokio::time::sleep(backoff_delay(attempt, backoff_seed(0))).await;
                 attempt += 1;
             }
         }
@@ -773,7 +797,11 @@ async fn one_split(
                                 break;
                             }
                             prev = Some(format!("{e:#}"));
-                            tokio::time::sleep(Duration::from_secs(1u64 << attempt)).await;
+                            tokio::time::sleep(backoff_delay(
+                                attempt,
+                                backoff_seed(pj.piece_idx as usize),
+                            ))
+                            .await;
                             attempt += 1;
                         }
                     }
@@ -1202,6 +1230,21 @@ async fn fetch_piece(pj: &PieceJob, ctx: &PieceCtx<'_>, tried: &mut Vec<usize>) 
                  本次请求 bytes={req_start}-{req_end_incl}（远端可能变小或被替换）: {url}"
             );
         }
+        if status == reqwest::StatusCode::PRECONDITION_FAILED {
+            // 412 = "你带的前置条件不成立"。
+            //
+            // 注意分寸（RFC 9110 §13.1.5）：`If-Range` 的验证器不匹配时，服务器**应当**回 200（整份），
+            // 那条路经我们已经当降级处理了。412 是**防御性**分支：有些服务器/代理把验证器当硬前置条件。
+            // 不管哪种，含义都是"远端对象变了"—— 别报成"不支持 Range"。
+            // 开着 `--if-range` 时才会走到这；没开就是源自己发的怪状态码。
+            pool.record_failure(idx);
+            anyhow::bail!(
+                "服务器回 412（前置条件不满足）：远端文件在下载期间被替换 —— \
+                 我们发的验证器已过期。\n\
+                 \x20 去掉 --if-range 重下一遍，或删掉 .part 重来：{url}\
+                 （本次请求 bytes={req_start}-{req_end_incl}）"
+            );
+        }
         pool.record_failure(idx);
         anyhow::bail!("服务器不支持 Range（HTTP {status}），无法分片: {url}");
     }
@@ -1421,6 +1464,44 @@ mod tests {
     ///
     /// 用**极短窗口**单测（`new(5)` 的窗口是 `max(10, 2×5) = 10s`，太久）——
     /// 所以这里直接构造 `StallGuard` 的字段，不走 `new()`。
+    /// 退避：基数按 2^attempt 增长，抖动落在 [0,500ms)；同一 (attempt, seed) 结果确定。
+    #[test]
+    fn backoff_grows_and_jitters_within_500ms() {
+        // 0..6 档按 2^attempt 增长；再往上就封顶 60s（否则 2^n 很快就是天数级）
+        for attempt in 0..6u32 {
+            let base = Duration::from_secs(1u64 << attempt);
+            let d = backoff_delay(attempt, 42);
+            assert!(d >= base, "attempt={attempt}: {d:?} < {base:?}");
+            assert!(d < base + Duration::from_millis(500), "抖动超界: {d:?}");
+            assert_eq!(d, backoff_delay(attempt, 42), "纯函数：同样输入同样输出");
+        }
+        // 封顶之后：底数不再增长，但抖动仍在
+        for attempt in 6..10u32 {
+            let d = backoff_delay(attempt, 42);
+            assert_eq!(d - Duration::from_secs(60), Duration::from_millis(42));
+        }
+        // attempt 很大时封顶 60s：不该 panic，也不该睡到天荒地老
+        assert_eq!(backoff_delay(64, 0), Duration::from_secs(60));
+    }
+
+    /// 抖动的**目的**是打散：不同 seed 落在 500ms 内至少 10 个 50ms 桶里。
+    /// 只测"有 500ms 上界"是不够的 —— 全落在 0 也算通过，那就等于没抖动。
+    #[test]
+    fn jitter_actually_spreads_across_buckets() {
+        let buckets: std::collections::BTreeSet<u64> = (0..1000u64)
+            .map(|seed| {
+                let ms = (backoff_delay(0, seed) - Duration::from_secs(1)).as_millis() as u64;
+                ms / 50
+            })
+            .collect();
+        assert!(
+            buckets.len() >= 10,
+            "1000 个 seed 只落在 {} 个 50ms 桶里，抖动形同虚设: {:?}",
+            buckets.len(),
+            buckets
+        );
+    }
+
     #[test]
     fn stall_guard_trips_only_when_nothing_moves() {
         let mut g = StallGuard {
