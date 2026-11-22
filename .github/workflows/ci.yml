@@ -60,17 +60,16 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 
-      # 为什么不用 services：services 的容器里建监听，runner 连不到那个端口；
-      # 而用例要动态建 proxy（端口随机）。直接在 runner 本机跑二进制最省事。
+      # 为什么不用 services：service 的容器里建监听，runner 连不到那个端口（用例要动态建 proxy、端口随机）。
+      # 直接在 runner 本机跑二进制最省事；起不来就整步失败，不让用例"静默跳过"。
       - name: Start toxiproxy
         run: |
           set -euo pipefail
-          curl -fsSL -o /tmp/toxiproxy-server \
-            https://github.com/Shopify/toxiproxy/releases/download/v2.11.0/toxiproxy-server-linux-amd64
+          curl -fsSL -o /tmp/toxiproxy-server https://github.com/Shopify/toxiproxy/releases/download/v2.11.0/toxiproxy-server-linux-amd64
           chmod +x /tmp/toxiproxy-server
           nohup /tmp/toxiproxy-server -host 127.0.0.1 -port 8474 > /tmp/toxiproxy.log 2>&1 &
           for i in $(seq 1 40); do
-            if curl -sf http://127.0.0.1:8474/proxies >/dev/null; then echo "toxiproxy up"; exit 0; fi
+            if curl -sf http://127.0.0.1:8474/proxies > /dev/null; then echo "toxiproxy up"; exit 0; fi
             sleep 0.5
           done
           echo "toxiproxy 没起来："; cat /tmp/toxiproxy.log; exit 1
@@ -114,7 +113,6 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Test
-        env:
         run: cargo test --all-targets --locked
 
       # `0 tests` / SKIP / 被删掉的测试，在 cargo 输出里和 passed 长得一样。
