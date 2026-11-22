@@ -32,6 +32,11 @@
 
 ### 修复
 
+- 重试退避加抖动（`[0,500ms)`）：此前 `1 << attempt` 是固定值，多分片同时失败会在同一秒一起重试，
+  瞬时并发翻倍（issue #17）。现在退避是纯函数 `backoff_delay(attempt, seed)`，可测。
+- `--if-range` 打开时，服务器回 412 不再报成「服务器不支持 Range」，而是
+  「远端文件在下载期间被替换 —— 我们发的验证器已过期」。
+
 - `fetch --force` 会在校验输入**之前**删除文件，导致 `--name` 越界时删掉 `--dir` 之外的文件。
 - `urls_file` 里一行坏 URL 会让整批中止（现在跳过并计数）。
 - `run` 与 `fetch` 对同一个 URL 推出不同文件名（`run` 不剥 `?query`、不 percent-decode）。
@@ -39,6 +44,11 @@
 - SOCKS 代理被静默忽略并直连（现在启动期拒绝并给出两种替代方案）。
 
 ### 安全
+
+- **TLS 后端换成 rustls**（`reqwest` 关闭默认特性、启用 `rustls-tls`）：
+  此前是 native-tls（Windows 走 schannel、Linux 走 OpenSSL），依赖树里带着 `openssl-sys`。
+- 新增 `cargo-deny` 门禁（`deny.toml` + CI 步骤）：许可证白名单、RustSec 公告、只从 crates.io 取。
+  它当场抓到两条：`url 2.5.8` 有 RUSTSEC-2026-0592（已升 2.5.9）、`openssl-sys` 在树里（见上）。
 
 - 依赖更新：`zip` 9.8.1（修 "Zip Cloaking"）、`tokio` 1.54.1（Dependabot 告警 #1–#4）。
 - 路径安全：URL 末段、整合包清单、zip 条目名三处来源统一过 `pathsafe`，
