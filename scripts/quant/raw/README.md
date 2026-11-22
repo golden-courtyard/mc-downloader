@@ -22,6 +22,23 @@ per-thread 文件、18 轮就是 967 个；它们对复核没有增量信息，�
 原始 per-thread strace（`e1f-*` / `e3f-*`）、逐轮 `out-*.log` / `err-*.log`、假源访问日志
 （`server-win.log`、`origin-*.log`）**已删除**，需要时按报告 §11 的命令重跑。
 
+### E8（实时防护，火绒）
+
+| 文件 | 是什么 |
+|---|---|
+| `e8-av.csv` | 主实验：1 GiB × conns 1/16 × 每态 3 轮，**`state` 列区分开/关**（`on` 6 行 + `off` 6 行）；含墙钟、写放大、`Avg. Disk sec/Write` 均值与 p95 |
+| `e8-lock.csv` | E8b 锁文件实验，**开**态（该表由旧版脚本生成，无 `state` 列；新版已加 `-State`） |
+| `e8-lock-off.csv` | E8b，**关**态 |
+
+补测「关」态的命令（人工关掉火绒实时防护后跑）：
+
+```bash
+pwsh -NoProfile -File scripts/quant/win_e8.ps1      -ExePath <同一份 exe> -State off
+pwsh -NoProfile -File scripts/quant/win_e8_lock.ps1 -ExePath <同一份 exe> -State off
+```
+
+两态**必须同一二进制**；状态用 EICAR 测试串两侧验证（写入 `%TEMP%` 后 4 s 文件仍在 ⇒ 关着）。
+
 ## #8 的量尺：写跳变次数 `H`
 
 ```bash

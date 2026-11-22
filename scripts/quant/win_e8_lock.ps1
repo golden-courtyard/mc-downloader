@@ -29,6 +29,7 @@ param(
     [string]$Name = 'q1g.bin',
     [string]$Dir = 'D:\quant-av',
     [int]$BigMiB = 100,
+    [string]$State = '',
     [int]$Attempts = 20,
     [int]$AttemptSleepMs = 50,
     [string]$Csv = 'scripts\quant\raw\e8-lock.csv'
@@ -39,11 +40,17 @@ $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $csvPath = if ([System.IO.Path]::IsPathRooted($Csv)) { $Csv } else { Join-Path $repo $Csv }
 New-Item -ItemType Directory -Force -Path (Split-Path $csvPath) | Out-Null
 New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+$stateLabel = if ($State) { $State } else {
+    $svc = Get-Service -Name 'HipsDaemon' -ErrorAction SilentlyContinue
+    $tray = @(Get-Process -Name 'HipsTray' -ErrorAction SilentlyContinue).Count
+    if ($svc -and $svc.Status -eq 'Running' -and $tray -gt 0) { 'on' } else { 'unknown' }
+}
+Write-Host "防护状态: $stateLabel"
 
 $rows = New-Object System.Collections.Generic.List[object]
 function Add-Row($test, $attempt, $op, $ok, $errno, $ms, $note) {
     $rows.Add([pscustomobject]@{
-            test = $test; attempt = $attempt; op = $op; ok = [int]$ok
+            state = $stateLabel; test = $test; attempt = $attempt; op = $op; ok = [int]$ok
             errno = $errno; elapsed_ms = [math]::Round($ms, 3); note = $note
         })
 }
@@ -158,7 +165,8 @@ if (Test-Path $landed) {
 
 $rows | Export-Csv -Path $csvPath -NoTypeInformation -Append -Encoding utf8
 # 汇总
-$fail32 = @($rows | Where-Object { $_.ok -eq 0 -and ($_.errno -eq -2147024864 -or $_.note -match '32|5') })
+$failAll = @($rows | Where-Object { $_.ok -eq 0 })
+$failBusy = @($failAll | Where-Object { $_.note -match 'being used|cannot access the file|另一个程序|拒绝访问' })
 Write-Host ""
 Write-Host "=== 汇总 ==="
 $rows | Group-Object test, op | ForEach-Object {
@@ -168,6 +176,7 @@ $rows | Group-Object test, op | ForEach-Object {
         (($g | Measure-Object elapsed_ms -Average).Average))
 }
 Write-Host ""
-Write-Host ("出现 os error 32/5 的行数: {0}" -f $fail32.Count)
+Write-Host ("失败行数: {0}（其中「文件被其他句柄占用 / 拒绝访问」类: {1}）" -f $failAll.Count, $failBusy.Count)
+if ($failAll.Count) { $failAll | Format-Table state, test, attempt, op, errno, note -Auto }
 $rows | Where-Object { $_.ok -eq 0 } | Select-Object -First 12 | Format-Table -Auto
 Write-Host "CSV -> $csvPath"
