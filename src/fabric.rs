@@ -63,9 +63,9 @@ pub fn pick_stable_loader(json: &str) -> Result<String> {
 }
 
 /// 查该 MC 版本最新的 stable Fabric loader。网络失败 ⇒ 报错，**不静默跳过**。
-pub async fn latest_stable_loader(mc: &str, opts: &DownloadOpts) -> Result<String> {
+pub async fn latest_stable_loader(mc: &str, opts: &DownloadOpts, base: &str) -> Result<String> {
     let client = crate::download::client(opts)?;
-    let url = format!("https://<你的源>/v2/versions/loader/{mc}");
+    let url = format!("{base}/v2/versions/loader/{mc}");
     let text = client
         .get(&url)
         .send()
@@ -82,9 +82,15 @@ pub async fn latest_stable_loader(mc: &str, opts: &DownloadOpts) -> Result<Strin
 
 /// 从 Fabric meta 拉 profile，把 json 落盘，并把它的 libraries 下好。
 /// 返回实例 id（fabric-loader-<loader>-<mc>）。
-pub async fn install(mc: &str, loader: &str, root: &Path, opts: &DownloadOpts) -> Result<String> {
+pub async fn install(
+    mc: &str,
+    loader: &str,
+    root: &Path,
+    opts: &DownloadOpts,
+    base: &str,
+) -> Result<String> {
     let client = crate::download::client(opts)?;
-    let url = format!("https://<你的源>/v2/versions/loader/{mc}/{loader}/profile/json");
+    let url = format!("{base}/v2/versions/loader/{mc}/{loader}/profile/json");
 
     let text = client
         .get(&url)

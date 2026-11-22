@@ -88,33 +88,26 @@ pub fn pick_promo_version(json: &str, mc: &str) -> Result<String> {
     )
 }
 
-/// Forge 的库只该来自这两个官方 maven（**纯函数**，可单测）。
+/// library 的 URL 只该来自**用户配的那些源的 host**（纯函数，可单测）。
 ///
 /// 防的是「install_profile 被篡改 / 上游变更，某个 library 的 url 指向别处」
 /// —— 我们不希望自己变成一个「照着任意 URL 下载」的执行器。
-pub fn is_allowed_forge_host(url: &str) -> bool {
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .unwrap_or("");
-    let host = rest.split('/').next().unwrap_or("").to_ascii_lowercase();
-    matches!(
-        host.as_str(),
-        "<你的源>"
-            | "<你的源>"
-            | "<你的源>"
-            | "<你的源>"
-            | "<你的源>"
-            | "<你的源>"
-    )
+///
+/// **白名单从配置推出，不写死一份**（issue #15）：写死的话，用户把自己的镜像填进 `[source]` 之后，
+/// installer 给的库地址会被我们自己的白名单拒掉 —— 那是"配置生效了一半"的典型坑。
+pub fn is_allowed_host(url: &str, allowed: &[String]) -> bool {
+    let Some(host) = crate::settings::Sources::host_of(url) else {
+        return false;
+    };
+    allowed.iter().any(|a| a.eq_ignore_ascii_case(&host))
 }
 
 /// 查该 MC 版本最新的 Forge（先 recommended，后 latest）。网络失败 ⇒ 报错，**不静默跳过**。
-pub async fn latest_forge(mc: &str, opts: &DownloadOpts) -> Result<String> {
+pub async fn latest_forge(mc: &str, opts: &DownloadOpts, meta_base: &str) -> Result<String> {
     let client = crate::download::client(opts)?;
-    let url = "https://<你的源>/net/minecraftforge/forge/promotions_slim.json";
+    let url = format!("{meta_base}/net/minecraftforge/forge/promotions_slim.json");
     let text = client
-        .get(url)
+        .get(&url)
         .send()
         .await
         .with_context(|| format!("请求 Forge promotions 失败: {url}"))?
@@ -132,7 +125,7 @@ pub async fn latest_forge(mc: &str, opts: &DownloadOpts) -> Result<String> {
 /// 跳过没有 `downloads.artifact` 的条目：那些是 processor 的运行依赖，
 /// 由 installer 自己在 `--offline` 阶段从已就位的 `libraries/` 里取；
 /// 没有 `url` 的（本地文件）也跳过。
-pub fn jobs_from_profiles(jsons: &[(&str, &str)]) -> Result<Vec<Job>> {
+pub fn jobs_from_profiles(jsons: &[(&str, &str)], allowed: &[String]) -> Result<Vec<Job>> {
     let mut seen = std::collections::HashSet::new();
     let mut jobs = Vec::new();
     let mut total_libs = 0usize;
@@ -148,7 +141,7 @@ pub fn jobs_from_profiles(jsons: &[(&str, &str)]) -> Result<Vec<Job>> {
                 continue;
             }
             // 只认官方 maven；不认识的源跳过并警告（一个库不合格不该毁掉整次安装）
-            if !is_allowed_forge_host(&art.url) {
+            if !is_allowed_host(&art.url, allowed) {
                 eprintln!("[!] 跳过非官方源的 library: {} -> {}", lib.name, art.url);
                 continue;
             }
@@ -206,14 +199,21 @@ pub fn has_java() -> bool {
 }
 
 /// 安装 Forge 到 `root`。返回版本 id。
-pub async fn install(mc: &str, forge: &str, root: &Path, opts: &DownloadOpts) -> Result<String> {
+pub async fn install(
+    mc: &str,
+    forge: &str,
+    root: &Path,
+    opts: &DownloadOpts,
+    src: &crate::settings::Sources,
+) -> Result<String> {
     let id = version_id(mc, forge);
     let client = crate::download::client(opts)?;
 
     // ① 下 installer jar
     let ins_name = format!("forge-{mc}-{forge}-installer.jar");
     let ins_url = format!(
-        "https://<你的源>/net/minecraftforge/forge/{mc}-{forge}/{ins_name}"
+        "{}/net/minecraftforge/forge/{mc}-{forge}/{ins_name}",
+        src.forge_maven
     );
     let cache = root.join(".cache-installers");
     tokio::fs::create_dir_all(&cache).await?;
@@ -259,10 +259,15 @@ pub async fn install(mc: &str, forge: &str, root: &Path, opts: &DownloadOpts) ->
     // 但 `--offline` 阶段 installer 检查的是 `version.json` 的 29 个**运行时**库
     // （`net.minecraftforge:eventbus` / `cpw.mods:modlauncher` 那些）。
     // 只下前者会得到 "These libraries failed to download"（实测）。
-    let jobs = jobs_from_profiles(&[
-        ("install_profile.json", &profile_json),
-        ("version.json", &version_json),
-    ])?;
+    // 白名单从**用户配的源**推出：换镜像后 installer 给的库地址不该被自己拒掉
+    let allowed = src.hosts();
+    let jobs = jobs_from_profiles(
+        &[
+            ("install_profile.json", &profile_json),
+            ("version.json", &version_json),
+        ],
+        &allowed,
+    )?;
     println!(
         "[*] 要下的 library: {} 个（install_profile + version.json 合并去重；我们自己下，比 installer 稳）",
         jobs.len()
@@ -390,14 +395,14 @@ mod tests {
     fn profile_skips_processor_deps_without_artifact() {
         // 第一条有 artifact，第二条没有（processor 依赖），第三条 url 为空
         let json = r#"{"libraries":[
-            {"name":"a:b:1","downloads":{"artifact":{"path":"a/b/1/b-1.jar","url":"https://<你的源>/b-1.jar","sha1":"aa","size":10}}},
+            {"name":"a:b:1","downloads":{"artifact":{"path":"a/b/1/b-1.jar","url":"https://maven.example.invalid/b-1.jar","sha1":"aa","size":10}}},
             {"name":"c:d:2"},
             {"name":"e:f:3","downloads":{"artifact":{"path":"e/f/3/f-3.jar","url":""}}}
         ]}"#;
-        let jobs = jobs_from_profiles(&[("install_profile.json", json)]).unwrap();
+        let jobs = jobs_from_profiles(&[("install_profile.json", json)], &allowed()).unwrap();
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].path, "libraries/a/b/1/b-1.jar");
-        assert_eq!(jobs[0].url, "https://<你的源>/b-1.jar");
+        assert_eq!(jobs[0].url, "https://maven.example.invalid/b-1.jar");
         assert_eq!(jobs[0].sha1.as_deref(), Some("aa"));
         assert_eq!(jobs[0].size, SizeHint::Exact(10));
     }
@@ -405,7 +410,7 @@ mod tests {
     #[test]
     fn profile_without_downloadable_libs_is_an_error() {
         let json = r#"{"libraries":[{"name":"a:b:1"},{"name":"c:d:2"}]}"#;
-        let e = jobs_from_profiles(&[("install_profile.json", json)])
+        let e = jobs_from_profiles(&[("install_profile.json", json)], &allowed())
             .unwrap_err()
             .to_string();
         assert!(e.contains("没有任何可下载的 library"), "{e}");
@@ -415,13 +420,13 @@ mod tests {
     fn merges_two_jsons_and_dedups_by_path() {
         // a 在两个 json 里都有（重复），b 只在第二个里
         let p1 = r#"{"libraries":[
-            {"name":"x:a:1","downloads":{"artifact":{"path":"x/a/1/a-1.jar","url":"https://<你的源>/a-1.jar"}}}
+            {"name":"x:a:1","downloads":{"artifact":{"path":"x/a/1/a-1.jar","url":"https://maven.example.invalid/a-1.jar"}}}
         ]}"#;
         let p2 = r#"{"libraries":[
-            {"name":"x:a:1","downloads":{"artifact":{"path":"x/a/1/a-1.jar","url":"https://<你的源>/a-1.jar"}}},
-            {"name":"y:b:2","downloads":{"artifact":{"path":"y/b/2/b-2.jar","url":"https://<你的源>/b-2.jar"}}}
+            {"name":"x:a:1","downloads":{"artifact":{"path":"x/a/1/a-1.jar","url":"https://maven.example.invalid/a-1.jar"}}},
+            {"name":"y:b:2","downloads":{"artifact":{"path":"y/b/2/b-2.jar","url":"https://maven.example.invalid/b-2.jar"}}}
         ]}"#;
-        let jobs = jobs_from_profiles(&[("p1", p1), ("p2", p2)]).unwrap();
+        let jobs = jobs_from_profiles(&[("p1", p1), ("p2", p2)], &allowed()).unwrap();
         assert_eq!(
             jobs.len(),
             2,
@@ -432,25 +437,36 @@ mod tests {
         assert!(jobs.iter().any(|j| j.path == "libraries/y/b/2/b-2.jar"));
     }
 
+    /// 白名单是**从配置推出来的**：只认配置里那些 host，大小写不敏感，`host.evil.com` 不算。
+    fn allowed() -> Vec<String> {
+        [
+            "maven.example.invalid",
+            "files.example.invalid",
+            "libraries.example.invalid",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+    }
+
     #[test]
-    fn only_official_maven_hosts_are_allowed() {
-        assert!(is_allowed_forge_host(
-            "https://<你的源>/a/b.jar"
+    fn only_configured_hosts_are_allowed() {
+        let a = allowed();
+        assert!(is_allowed_host("https://maven.example.invalid/a/b.jar", &a));
+        assert!(is_allowed_host("https://files.example.invalid/x", &a));
+        // 大小写不敏感（host 里大写是合法的）
+        assert!(is_allowed_host("https://MAVEN.EXAMPLE.INVALID/x.jar", &a));
+        // 不在配置里的一律不信 —— 包括"长得像"的
+        assert!(!is_allowed_host("https://evil.example.com/x.jar", &a));
+        assert!(!is_allowed_host(
+            "https://maven.example.invalid.evil.com/x",
+            &a
         ));
-        assert!(is_allowed_forge_host("https://<你的源>/x"));
-        assert!(is_allowed_forge_host(
-            "https://<你的源>/releases/x.jar"
-        ));
-        assert!(is_allowed_forge_host(
-            "https://<你的源>/x.jar"
-        ));
-        assert!(!is_allowed_forge_host("https://evil.example.com/x.jar"));
-        assert!(!is_allowed_forge_host(
-            "https://<你的源>.evil.com/x"
-        ));
-        assert!(!is_allowed_forge_host("http://127.0.0.1:8080/x.jar"));
-        assert!(!is_allowed_forge_host(""), "空串要判 false");
-        assert!(!is_allowed_forge_host("not a url"));
+        assert!(!is_allowed_host("http://127.0.0.1:8080/x.jar", &a));
+        assert!(!is_allowed_host("", &a), "空串要判 false");
+        assert!(!is_allowed_host("not a url", &a));
+        // 空白名单 = 什么都不放行（不是"全放行"）
+        assert!(!is_allowed_host("https://maven.example.invalid/x.jar", &[]));
     }
 
     #[test]

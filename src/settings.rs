@@ -71,8 +71,10 @@ pub struct SourceSettings {
     pub assets: Option<String>,
     /// Fabric loader 元数据基址
     pub fabric: Option<String>,
-    /// Forge：`promotions_slim.json` 所在基址（maven 基址默认与它同 host）
-    pub forge: Option<String>,
+    /// Forge：`promotions_slim.json` 所在基址
+    pub forge_meta: Option<String>,
+    /// Forge：maven 基址（installer 与 libs）
+    pub forge_maven: Option<String>,
     /// NeoForge：maven 基址
     pub neoforge: Option<String>,
 }
@@ -86,7 +88,8 @@ pub struct Sources {
     pub metadata: String,
     pub assets: String,
     pub fabric: String,
-    pub forge: String,
+    pub forge_meta: String,
+    pub forge_maven: String,
     pub neoforge: String,
 }
 
@@ -109,7 +112,8 @@ impl Sources {
             metadata: need("metadata", &cfg.metadata)?,
             assets: need("assets", &cfg.assets)?,
             fabric: need("fabric", &cfg.fabric)?,
-            forge: need("forge", &cfg.forge)?,
+            forge_meta: need("forge_meta", &cfg.forge_meta)?,
+            forge_maven: need("forge_maven", &cfg.forge_maven)?,
             neoforge: need("neoforge", &cfg.neoforge)?,
         })
     }
@@ -131,7 +135,8 @@ impl Sources {
             &self.metadata,
             &self.assets,
             &self.fabric,
-            &self.forge,
+            &self.forge_meta,
+            &self.forge_maven,
             &self.neoforge,
         ]
         .into_iter()

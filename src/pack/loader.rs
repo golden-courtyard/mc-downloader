@@ -15,13 +15,16 @@ pub async fn install(
     mc: &str,
     root: &Path,
     opts: &DownloadOpts,
+    src: &crate::settings::Sources,
 ) -> Result<String> {
     // 单一判定口：支持性只在这里说「不行」，下面的 match 只负责「怎么装」
     loader.check_supported()?;
 
     match loader {
         Loader::Vanilla => Ok(mc.to_string()),
-        Loader::Fabric { loader } => crate::fabric::install(mc, loader, root, opts).await,
+        Loader::Fabric { loader } => {
+            crate::fabric::install(mc, loader, root, opts, &src.fabric).await
+        }
         // 走到这里说明 check_supported 与 match 两处判断脱节了 —— 响亮地报出来
         other => anyhow::bail!(
             "内部错误：{} 通过了支持性检查却没有对应实现（check_supported 与 install 不一致）",

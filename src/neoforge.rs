@@ -8,7 +8,7 @@
 //!
 //! | | Forge | NeoForge |
 //! |---|---|---|
-//! | installer URL | `<你的源>/.../forge/{mc}-{ver}/forge-{mc}-{ver}-installer.jar` | `<你的源>/releases/net/neoforged/neoforge/{ver}/neoforge-{ver}-installer.jar` |
+//! | installer URL | `[source].forge_maven` + `/net/minecraftforge/…` | `[source].neoforge` + `/net/neoforged/neoforge/{ver}/…` |
 //! | 版本来源 | `promos.json` 的 `recommended` | `maven-metadata.xml` 取最高 |
 //! | 版本映射 | `{mc}-{forge}` | MC 去掉 `1.` 前缀（`1.21.1` → `21.1`）|
 //!
@@ -116,11 +116,11 @@ pub fn version_id(ver: &str) -> String {
 }
 
 /// 查该 MC 版本最新的 NeoForge（不指定版本时用）。
-pub async fn latest(mc: &str, opts: &DownloadOpts) -> Result<String> {
-    let url = "https://<你的源>/releases/net/neoforged/neoforge/maven-metadata.xml";
+pub async fn latest(mc: &str, opts: &DownloadOpts, base: &str) -> Result<String> {
+    let url = format!("{base}/net/neoforged/neoforge/maven-metadata.xml");
     let client = download::client(opts)?;
     let xml = client
-        .get(url)
+        .get(&url)
         .send()
         .await
         .with_context(|| format!("请求 {url} 失败"))?
@@ -135,7 +135,14 @@ pub async fn latest(mc: &str, opts: &DownloadOpts) -> Result<String> {
 ///
 /// 流程和 `forge::install` 一致：下 installer → 读两个 json → 我们下 libraries
 /// → 建 launcher_profiles → 跑 installer `--offline` → 验产物。
-pub async fn install(mc: &str, ver: &str, root: &Path, opts: &DownloadOpts) -> Result<String> {
+pub async fn install(
+    mc: &str,
+    ver: &str,
+    root: &Path,
+    opts: &DownloadOpts,
+    src: &crate::settings::Sources,
+) -> Result<String> {
+    let base = src.neoforge.as_str();
     // 校验版本与 MC 匹配 —— 防的是「mc = 1.21.1 却写 loader = "neoforge:20.2.92"」这种配错。
     // 不校验的话，installer 会照装一个属于别的 MC 版本的 NeoForge，目录名对得上、启动才崩。
     let expect = format!("{}.", neo_prefix(mc));
@@ -151,8 +158,7 @@ pub async fn install(mc: &str, ver: &str, root: &Path, opts: &DownloadOpts) -> R
 
     // ① 下 installer jar
     let ins_name = format!("neoforge-{ver}-installer.jar");
-    let ins_url =
-        format!("https://<你的源>/releases/net/neoforged/neoforge/{ver}/{ins_name}");
+    let ins_url = format!("{base}/net/neoforged/neoforge/{ver}/{ins_name}");
     let cache = root.join(".cache-installers");
     tokio::fs::create_dir_all(&cache).await?;
     let ins_path = cache.join(&ins_name);
@@ -194,10 +200,14 @@ pub async fn install(mc: &str, ver: &str, root: &Path, opts: &DownloadOpts) -> R
         .await??;
 
     // 两个 json 都要下（理由同 forge.rs：--offline 阶段校验的是 version.json 的运行时库）
-    let jobs = crate::forge::jobs_from_profiles(&[
-        ("install_profile.json", &profile_json),
-        ("version.json", &version_json),
-    ])?;
+    let allowed = src.hosts();
+    let jobs = crate::forge::jobs_from_profiles(
+        &[
+            ("install_profile.json", &profile_json),
+            ("version.json", &version_json),
+        ],
+        &allowed,
+    )?;
     println!(
         "[*] 要下的 library: {} 个（install_profile + version.json 合并去重）",
         jobs.len()

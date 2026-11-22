@@ -194,6 +194,8 @@ async fn main() -> Result<()> {
     let ctx = commands::Ctx {
         opts: merged.opts.clone(),
         net: net.to_string(),
+        source: loaded.settings.source.clone(),
+        config_path: loaded.path.clone(),
     };
 
     let Some(cmd) = args.cmd else {
@@ -235,7 +237,8 @@ async fn main() -> Result<()> {
 
             let total = cfg.tasks.len();
             println!("[*] 脚本: {} （{} 个任务）", script.display(), total);
-            commands::run::execute(&cfg.tasks, parallel, &opts).await?;
+            let src = settings::Sources::resolve(&ctx.source, ctx.config_path.as_deref())?;
+            commands::run::execute(&cfg.tasks, parallel, &opts, &src).await?;
         }
         Cmd::Fetch {
             url,

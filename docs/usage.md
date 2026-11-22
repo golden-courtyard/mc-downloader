@@ -47,6 +47,35 @@ mc-downloader.exe fetch "<URL>" -d "<目录>" --piece-conns 16
 
 ---
 
+## 源：必须先自己配（issue #15）
+
+**本工具不内置任何下载源**，官方或第三方都不内置。anilla / un / pack 都要先有源，
+否则直接报错并告诉你缺哪一项：
+
+```
+Error: 未配置下载源（[source].metadata）。
+  本工具不内置任何源地址 —— 这是刻意的（issue #15）。
+  请先在 <配置文件> 的 [source] 段填写 metadata 地址。
+  只想下单个文件？mc-downloader fetch <url> -d <dir> 不需要任何源。
+```
+
+配置文件里这么写（--config <path>，或放到平台配置目录）：
+
+```toml
+[source]
+metadata    = "https://<你的源>/version_manifest_v2.json"
+assets      = "https://<你的源>"
+fabric      = "https://<你的源>"
+forge_meta  = "https://<你的源>"
+forge_maven = "https://<你的源>"
+neoforge    = "https://<你的源>"
+```
+
+六项**全必填**（用到哪个加载器就得配哪个）。etch <url> 不受影响 —— 你给地址、它只做传输。
+
+**为什么**：2026-10-20 PCL2 移除 MC 下载功能（「为遵守相关法律法规」）——「第三方工具内置下载通道」
+处在合规灰区。所以「知道去哪下」由你决定，工具只负责下得对、下得快。
+Forge installer 的库地址白名单**也是从你配的源推出来的**，不是写死一份 —— 换镜像不会被自己拒掉。
 ## 二、`fetch`：下一个文件
 
 ```bash
@@ -234,7 +263,7 @@ mc-downloader run my.toml --concurrency 8      # 等价
 > 判据：**`probe` 的单连接值明显低于你的实际带宽时，就该加 `--piece-conns`。**
 > 反过来，如果 `probe` 已经跑满带宽，加连接不会更快（纯抢占）。
 
-**经验值**：国内镜像站（阿里云 / 清华 / 中科大）试 `--piece-conns 16`；
+**经验值**：你自己配的公共镜像站可以先试 `--piece-conns 16`；
 GitHub、境外 CDN 先用 8；不确定就开 `--adaptive true` 让它自己调（上限 `2 × piece-conns`）。
 
 #### 还有一条：目标盘是机械盘时，**别加**

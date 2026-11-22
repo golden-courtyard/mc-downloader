@@ -24,4 +24,8 @@ use mc_downloader::download::DownloadOpts;
 pub struct Ctx {
     pub opts: DownloadOpts,
     pub net: String,
+    /// [source]：下载源。**只有需要源的子命令才解析它** —— fetch 不该因为没有源而失败。
+    pub source: mc_downloader::settings::SourceSettings,
+    /// 配置文件路径（给「未配置源」的错误文案指路）
+    pub config_path: Option<std::path::PathBuf>,
 }

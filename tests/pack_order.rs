@@ -48,7 +48,16 @@ async fn forge_pack_fails_before_any_download_or_mkdir() {
         ..DownloadOpts::default()
     };
 
-    let err = pack::install(&pack, &inst, &opts)
+    // 这个测试不依赖真实的源：Forge 包在支持性检查就 bail，走不到下载
+    let src = mc_downloader::settings::Sources {
+        metadata: "http://127.0.0.1:9/m".into(),
+        assets: "http://127.0.0.1:9/a".into(),
+        fabric: "http://127.0.0.1:9/f".into(),
+        forge_meta: "http://127.0.0.1:9/fm".into(),
+        forge_maven: "http://127.0.0.1:9/fv".into(),
+        neoforge: "http://127.0.0.1:9/n".into(),
+    };
+    let err = pack::install(&pack, &inst, &opts, &src)
         .await
         .expect_err("Forge 包必须被拒绝");
     let msg = format!("{err:#}");

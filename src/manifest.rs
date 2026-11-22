@@ -1,8 +1,6 @@
 use anyhow::{Result, bail};
 use serde::Deserialize;
 
-const URL: &str = "https://<你的源>/mc/game/version_manifest_v2.json";
-
 #[derive(Debug, Deserialize)]
 pub struct Manifest {
     pub versions: Vec<Ver>,
@@ -16,9 +14,10 @@ pub struct Ver {
     pub kind: String,
 }
 
-pub async fn fetch(client: &reqwest::Client) -> Result<Manifest> {
+/// `url` 是用户配的版本清单地址（`[source].metadata`）。**没有默认值**（issue #15）。
+pub async fn fetch(client: &reqwest::Client, url: &str) -> Result<Manifest> {
     Ok(client
-        .get(URL)
+        .get(url)
         .send()
         .await?
         .error_for_status()?

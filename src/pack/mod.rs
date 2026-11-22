@@ -22,7 +22,12 @@ use crate::download::DownloadOpts;
 use crate::version::{Job, SizeHint};
 use spec::PackSpec;
 
-pub async fn install(pack: &Path, root: &Path, opts: &DownloadOpts) -> Result<()> {
+pub async fn install(
+    pack: &Path,
+    root: &Path,
+    opts: &DownloadOpts,
+    src: &crate::settings::Sources,
+) -> Result<()> {
     println!("[*] 读取 {}", pack.display());
 
     let file = File::open(pack).with_context(|| format!("打不开整合包: {}", pack.display()))?;
@@ -32,7 +37,7 @@ pub async fn install(pack: &Path, root: &Path, opts: &DownloadOpts) -> Result<()
     //    取直链要发网络请求，留给 async 的这一层做）
     let spec = match parse(&mut zip)? {
         Parsed::Ready(spec) => spec,
-        Parsed::CurseForge(m) => return install_curseforge(m, &mut zip, root, opts).await,
+        Parsed::CurseForge(m) => return install_curseforge(m, &mut zip, root, opts, src).await,
     };
 
     // ② 支持性检查必须在**任何下载之前** —— 否则下完几个 GB 才说「不支持」
@@ -40,10 +45,10 @@ pub async fn install(pack: &Path, root: &Path, opts: &DownloadOpts) -> Result<()
     print_summary(&spec);
 
     // ③ 原版
-    crate::vanilla::install(&spec.mc, root, opts).await?;
+    crate::vanilla::install(&spec.mc, root, opts, src).await?;
 
     // ④ 加载器
-    let inst_id = loader::install(&spec.loader, &spec.mc, root, opts).await?;
+    let inst_id = loader::install(&spec.loader, &spec.mc, root, opts, src).await?;
     let inst = root.join("versions").join(&inst_id);
     tokio::fs::create_dir_all(&inst).await?;
 
@@ -131,6 +136,8 @@ async fn install_curseforge(
     zip: &mut zip::ZipArchive<File>,
     root: &Path,
     opts: &DownloadOpts,
+    // CurseForge 包不装原版/加载器（§14.7），所以这里只为签名一致而收
+    _src: &crate::settings::Sources,
 ) -> Result<()> {
     println!("[*] 格式  : CurseForge（manifest.json）");
     println!("[*] 包名  : {}", m.name);

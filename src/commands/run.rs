@@ -11,6 +11,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use mc_downloader::download::DownloadOpts;
+use mc_downloader::settings::Sources;
 use mc_downloader::version::SizeHint;
 use mc_downloader::{config, download, fabric, forge, neoforge, pack, url_list, vanilla, version};
 
@@ -19,6 +20,7 @@ pub async fn execute(
     tasks: &[config::TaskSpec],
     parallel: bool,
     opts: &DownloadOpts,
+    src: &Sources,
 ) -> Result<()> {
     let total = tasks.len();
 
@@ -29,11 +31,14 @@ pub async fn execute(
             "[*] 并行模式：{total} 个任务，每任务并发 {}（总并发 {}）",
             per.concurrency, opts.concurrency
         );
-        let futs: Vec<_> = tasks.iter().map(|task| run_one_task(task, &per)).collect();
+        let futs: Vec<_> = tasks
+            .iter()
+            .map(|task| run_one_task(task, &per, src))
+            .collect();
         futures::future::try_join_all(futs).await?;
     } else {
         for task in tasks.iter() {
-            run_one_task(task, opts).await?;
+            run_one_task(task, opts, src).await?;
         }
     }
     println!("\n[+] 脚本执行完成：{total} 个任务");
@@ -41,7 +46,7 @@ pub async fn execute(
 }
 
 /// 执行单个任务（抽出来是为了能 join_all 并行）
-async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()> {
+async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts, src: &Sources) -> Result<()> {
     match task {
         config::TaskSpec::Mc {
             version,
@@ -50,7 +55,7 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
         } => {
             println!("[mc] {version} -> {dir}");
             let root = Path::new(dir);
-            vanilla::install(version, root, opts).await?;
+            vanilla::install(version, root, opts, src).await?;
 
             // 加载器：复用 fabric.rs，不在这里重写安装逻辑
             if let Some(spec) = loader.as_deref() {
@@ -62,26 +67,26 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
                     "fabric" => {
                         let lv = match want_ver {
                             Some(v) if !v.is_empty() => v,
-                            _ => fabric::latest_stable_loader(version, opts).await?,
+                            _ => fabric::latest_stable_loader(version, opts, &src.fabric).await?,
                         };
-                        fabric::install(version, &lv, root, opts).await?
+                        fabric::install(version, &lv, root, opts, &src.fabric).await?
                     }
                     // Forge：下载归我们（install_profile 的 libraries），构建归官方 installer（--offline）
                     "forge" => {
                         let fv = match want_ver {
                             Some(v) if !v.is_empty() => v,
-                            _ => forge::latest_forge(version, opts).await?,
+                            _ => forge::latest_forge(version, opts, &src.forge_meta).await?,
                         };
-                        forge::install(version, &fv, root, opts).await?
+                        forge::install(version, &fv, root, opts, src).await?
                     }
                     // NeoForge：同一个思路（下载归我们、构建归官方 installer），
                     // 但 installer URL 与版本映射都不同（见 neoforge.rs 文件头）
                     "neoforge" => {
                         let nv = match want_ver {
                             Some(v) if !v.is_empty() => v,
-                            _ => neoforge::latest(version, opts).await?,
+                            _ => neoforge::latest(version, opts, &src.neoforge).await?,
                         };
-                        neoforge::install(version, &nv, root, opts).await?
+                        neoforge::install(version, &nv, root, opts, src).await?
                     }
                     other => anyhow::bail!(
                         "未知的 loader: \"{other}\"（支持：fabric / forge / neoforge）"
@@ -160,7 +165,7 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
         }
         config::TaskSpec::Pack { file, dir } => {
             println!("[pack] {file} -> {dir}");
-            pack::install(Path::new(file), Path::new(dir), opts).await?;
+            pack::install(Path::new(file), Path::new(dir), opts, src).await?;
         }
     }
     Ok(())

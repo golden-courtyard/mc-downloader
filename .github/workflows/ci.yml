@@ -48,6 +48,15 @@ jobs:
           done
           echo "shell syntax OK ($n files)"
 
+      # issue #15：**不内置任何下载源**。除 docs/ 与 tests/ 外，src/ 里不该出现任何源地址。
+      # 这条是机器判据 —— 少写一行注释不会被发现，多写一行硬编码却会被它抓住。
+      - name: No built-in sources
+        run: |
+          if grep -rnE 'piston-meta|launchermeta|launcher\.mojang|bmclapi|download\.minecraft|meta\.fabricmc|files\.minecraftforge|maven\.minecraftforge|maven\.neoforged|resources\.download|libraries\.minecraft' src/; then
+            echo "::error::src/ 里不该出现下载源地址（issue #15）"
+            exit 1
+          fi
+          echo "no built-in sources OK"
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 

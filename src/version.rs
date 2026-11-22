@@ -161,7 +161,11 @@ fn allowed(rules: &[Rule]) -> bool {
     ok
 }
 
-pub async fn collect(client: &reqwest::Client, v: &VersionJson) -> Result<Vec<Job>> {
+pub async fn collect(
+    client: &reqwest::Client,
+    v: &VersionJson,
+    assets_base: &str,
+) -> Result<Vec<Job>> {
     let mut jobs = Vec::new();
 
     // ① 客户端 jar
@@ -239,7 +243,7 @@ pub async fn collect(client: &reqwest::Client, v: &VersionJson) -> Result<Vec<Jo
             }
             let (a, _) = h.split_at(2);
             jobs.push(Job {
-                url: format!("https://<你的源>/{a}/{h}"),
+                url: format!("{assets_base}/{a}/{h}"),
                 path: format!("assets/objects/{a}/{h}"),
                 sha1: Some(h.clone()),
                 size: SizeHint::from_exact(obj.size),
