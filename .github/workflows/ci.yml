@@ -15,6 +15,13 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
+      # 网络故障用例要有一条**真的会变坏**的链路：toxiproxy 提供 API（8474），
+      # 用例自己建 proxy、注毒、跑完删掉。本地没装时用例会 skip，CI 里要求必须跑。
+      services:
+        toxiproxy:
+          image: ghcr.io/shopify/toxiproxy:2.11.0
+          ports:
+            - 8474:8474
     steps:
       - uses: actions/checkout@v7
 
@@ -62,6 +69,8 @@ jobs:
 
       - name: Test
         env:
+          TOXIPROXY_ADDR: 127.0.0.1:8474
+          TOXIPROXY_REQUIRED: "1"
           # 稀疏文件语义是 spec §5.3 的硬判据。CI 是 ext4 必然支持，
           # 设此变量让「文件系统不支持稀疏」时的 SKIP 直接判失败 ——
           # 否则 SKIP 在 cargo test 里等同 passed，这条防线形同虚设。
@@ -97,6 +106,9 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Test
+        env:
+          TOXIPROXY_ADDR: 127.0.0.1:8474
+          TOXIPROXY_REQUIRED: "1"
         run: cargo test --all-targets --locked
 
       # `0 tests` / SKIP / 被删掉的测试，在 cargo 输出里和 passed 长得一样。
