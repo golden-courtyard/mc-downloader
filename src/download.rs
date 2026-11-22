@@ -226,6 +226,53 @@ fn reject_unrequested_encoding(resp: &reqwest::Response) -> Result<()> {
          \x20 处理办法：换一个不压缩的源，或让它对 Range 请求返回未压缩的字节。"
     );
 }
+
+/// 停滞检测：`read_timeout` 只管"**单次**读不返回"，挡不住"每 0.5 秒吐 1 字节"的慢滴。
+///
+/// 2026-11-23 实测：服务器每 0.5s 发 1 字节、`--timeout 2`，下载进程挂了 **7 分钟以上仍未退出**
+/// （最后手工杀掉）。`read_timeout` 每次都"按时返回了 1 字节"，所以永不触发。
+///
+/// 判据：在 `limit` 窗口内推进不足 `MIN_BYTES` 就算停滞。
+/// 窗口取 `max(10s, 2×timeout)`：默认 30s ⇒ 60s，正常慢链路（哪怕 100 B/s，4 KiB 也只要 41s）不会误杀。
+struct StallGuard {
+    last: std::time::Instant,
+    bytes: u64,
+    limit: std::time::Duration,
+}
+
+impl StallGuard {
+    /// 窗口内至少要推进这么多字节，否则判停滞
+    const MIN_BYTES: u64 = 4096;
+
+    fn new(timeout_secs: u64) -> Self {
+        Self {
+            last: std::time::Instant::now(),
+            bytes: 0,
+            limit: std::time::Duration::from_secs(timeout_secs.saturating_mul(2).max(10)),
+        }
+    }
+
+    /// 每收到一个 chunk 调一次。推进够量就重置窗口；窗口到期还不足量 ⇒ 报停滞。
+    fn note(&mut self, n: u64) -> Result<()> {
+        self.bytes += n;
+        if self.bytes >= Self::MIN_BYTES {
+            self.bytes = 0;
+            self.last = std::time::Instant::now();
+            return Ok(());
+        }
+        if self.last.elapsed() > self.limit {
+            anyhow::bail!(
+                "传输停滞：{:?} 内只收到 {} 字节（判据：{:?} 内至少 {} 字节）。\
+                 服务器在慢慢喂而不是断开 —— `--timeout` 的单次读超时管不到这种",
+                self.last.elapsed(),
+                self.bytes,
+                self.limit,
+                Self::MIN_BYTES
+            );
+        }
+        Ok(())
+    }
+}
 fn part_path(dst: &Path) -> PathBuf {
     let ext = dst
         .extension()
@@ -382,7 +429,7 @@ async fn one(
     {
         one_split(client, job, &dst, size, job.size.exact(), opts, pg).await?;
     } else {
-        one_stream(client, job, &dst, pg).await?;
+        one_stream(client, job, &dst, pg, opts.timeout_secs).await?;
     }
     // 收尾：给可执行文件打 MotW（浏览器会给，我们自己写字节就得自己补）
     crate::motw::mark_if_enabled(&dst, &job.url, opts.motw);
@@ -395,6 +442,7 @@ async fn one_stream(
     job: &Job,
     dst: &Path,
     pg: &Arc<Progress>,
+    stall_secs: u64,
 ) -> Result<()> {
     let resp = client.get(&job.url).send().await?.error_for_status()?;
     reject_unrequested_encoding(&resp)?;
@@ -405,10 +453,12 @@ async fn one_stream(
         .with_context(|| format!("创建临时文件失败: {}", tmp.display()))?;
 
     let mut hasher = Sha1::new();
+    let mut stall = StallGuard::new(stall_secs);
     let mut stream = resp.bytes_stream();
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.with_context(|| format!("读取响应流失败: {}", job.url))?;
+        stall.note(chunk.len() as u64)?;
         hasher.update(&chunk);
         // 限速点：**真实下载的字节**才扣令牌（续传补记进度不走这里）
         pg.add_throttled(chunk.len() as u64).await;
@@ -546,7 +596,7 @@ async fn one_split(
     let done_before = pg.done();
     let mut table = PieceTable::with_conns(size, opts.piece_conns);
     if !table.is_split() {
-        return one_stream(client, job, dst, pg).await;
+        return one_stream(client, job, dst, pg, opts.timeout_secs).await;
     }
 
     let tmp = part_path(dst);
@@ -651,6 +701,7 @@ async fn one_split(
         opts.if_range
             .then(|| Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())));
     let retries = opts.retries;
+    let stall_secs = opts.timeout_secs;
     // 后台任务一律交给 `TaskGroup`：早退（含 `?`）时余下的 worker 会被 Drop 逐个 abort，
     // 不会变成孤儿继续写 `.part`。
     let mut workers: TaskGroup<Result<()>> = TaskGroup::new();
@@ -689,6 +740,7 @@ async fn one_split(
                         client: &c,
                         path: &t,
                         expect_total,
+                        stall_secs,
                         pg: &pg,
                         pool: &pool,
                         validators: validators.as_ref(),
@@ -879,7 +931,7 @@ async fn one_split(
             pg.reset_to(done_before);
             PieceState::remove(&tmp);
             println!("[*] 服务器对 Range 回 200（整份），已退回单流下载");
-            return one_stream(client, job, dst, pg).await;
+            return one_stream(client, job, dst, pg, opts.timeout_secs).await;
         }
         return Err(e);
     }
@@ -1051,6 +1103,8 @@ struct PieceCtx<'a> {
     expect_total: Option<u64>,
     pg: &'a Arc<Progress>,
     pool: &'a Arc<SourcePool>,
+    /// 停滞检测的窗口基准（秒），见 [`StallGuard`]
+    stall_secs: u64,
     /// `--if-range` 打开时才是 `Some`：按**源**缓存强验证器（`source_idx -> ETag/Last-Modified`）。
     ///
     /// 为什么按源存：多镜像各自算 ETag，拿 A 的 ETag 去请求 B 必然不匹配 ⇒ 服务器回 200 ⇒
@@ -1079,6 +1133,7 @@ async fn fetch_piece(pj: &PieceJob, ctx: &PieceCtx<'_>, tried: &mut Vec<usize>) 
     let client = ctx.client;
     let path = ctx.path;
     let expect_total = ctx.expect_total;
+    let stall_secs = ctx.stall_secs;
     let pg = ctx.pg;
     let pool = ctx.pool;
     // 每次尝试都现选源：`tried` 为空时等价于 `pick()`（轮转 + 择优）。
@@ -1190,9 +1245,11 @@ async fn fetch_piece(pj: &PieceJob, ctx: &PieceCtx<'_>, tried: &mut Vec<usize>) 
 
     let expect = (pj.end - pj.start) as usize;
     let mut buf = Vec::with_capacity(expect);
+    let mut stall = StallGuard::new(stall_secs);
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
+        stall.note(chunk.len() as u64)?;
         // 限速点：分片 worker 也过同一个令牌桶 ⇒ 总带宽是全局上限，不是每连接各一份
         pg.add_throttled(chunk.len() as u64).await;
         buf.extend_from_slice(&chunk);
@@ -1358,6 +1415,37 @@ mod tests {
             strong_validator(Some("   "), Some("x")).as_deref(),
             Some("x")
         );
+    }
+
+    /// 停滞检测：窗口内推进不够量 ⇒ 报错；推进够量 ⇒ 重置窗口。
+    ///
+    /// 用**极短窗口**单测（`new(5)` 的窗口是 `max(10, 2×5) = 10s`，太久）——
+    /// 所以这里直接构造 `StallGuard` 的字段，不走 `new()`。
+    #[test]
+    fn stall_guard_trips_only_when_nothing_moves() {
+        let mut g = StallGuard {
+            last: std::time::Instant::now(),
+            bytes: 0,
+            limit: std::time::Duration::from_millis(50),
+        };
+        // 推进够量 ⇒ 重置，不报错
+        assert!(g.note(StallGuard::MIN_BYTES).is_ok());
+        assert_eq!(g.bytes, 0, "够量之后计数应清零");
+        // 不到量、且窗口没过 ⇒ 也不报错
+        assert!(g.note(10).is_ok());
+        // 真的不动了 ⇒ 报停滞
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let e = g.note(10).unwrap_err().to_string();
+        assert!(e.contains("传输停滞"), "{e}");
+        assert!(e.contains("4096"), "要说清判据: {e}");
+    }
+
+    /// 窗口的默认值：默认 30s 超时 ⇒ 60s 窗口；`--timeout 2` ⇒ 10s（有下限，别退到 4s）
+    #[test]
+    fn stall_window_is_twice_the_timeout_with_a_floor() {
+        assert_eq!(StallGuard::new(30).limit.as_secs(), 60);
+        assert_eq!(StallGuard::new(2).limit.as_secs(), 10, "下限 10s");
+        assert_eq!(StallGuard::new(0).limit.as_secs(), 10);
     }
     /// 416 的 `Content-Range: bytes */N` —— 只认 `*` 形式，其它一律当"没给"。
     #[test]
