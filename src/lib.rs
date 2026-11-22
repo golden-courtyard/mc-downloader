@@ -1,4 +1,4 @@
-//! 从 Mojang 官方 CDN 下载 Minecraft，或安装整合包。
+//! 把 Minecraft 相关文件放到正确位置（下载源由用户在 `[source]` 配置）。
 //!
 //! 拆成 lib + bin 两个 target：`main.rs` 只做 CLI 解析与分派，
 //! 逻辑全部住在这里，**为的是可测**——bin crate 的模块无法写集成测试。

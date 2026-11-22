@@ -10,7 +10,7 @@ use std::path::PathBuf;
 #[command(
     name = "mc-downloader",
     version,
-    about = "从 Mojang 官方 CDN 下载 Minecraft，或安装整合包"
+    about = "把 Minecraft 相关文件放到正确位置（下载源由你在 [source] 配置）"
 )]
 struct Args {
     /// 代理地址，例如 http://127.0.0.1:7897
