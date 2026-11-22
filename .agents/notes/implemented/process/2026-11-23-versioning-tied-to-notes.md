@@ -43,6 +43,19 @@ Status: implemented
 - **让 CI 强制 tag 与 `Cargo.toml` 一致**：本轮未做（tag 触发需要单独的 workflow）。
   目前靠 `release.md` 的清单 + `release(mc)` 提交模板。
 
+## 定量核对（2026-11-23 补）
+
+对参照项目 44 个 `dsh-v*` 标签做了定量观察（脚本 `scripts/quant/versioning_vs_notes.py`，
+报告 `docs/reports/versioning-vs-notes-20261123.md`）。三条与我们这条决策直接相关的发现：
+
+1. **每次发布带走的是 `implemented` 新增**（中位 33 份/发布），而 `proposed → implemented` 的迁移
+   很少在一个发布窗口内闭合（中位 0、均值 0.3）。⇒ 本文"按 `implemented` 推导版本位"的选择有实证支持；
+   `proposed` 会跨多个发布累积，不该拿它当"没进展"的证据。
+2. **`-rc` 段不是"只修 bug"**：rc 与 alpha 的 note 构成几乎相同（feature 24.8% vs 24.7%），只是批量更小。
+   ⇒ `versioning.md` 里"rc 冻结契约"这条**改标为我们的自有纪律**，不再以参照项目为依据。
+3. **时间序上出现过核心版本回退**（2 次，`0.1.7-alpha.1` → `0.1.5-rc.3` 等）。
+   ⇒ 新增一条"版本不许回退"的硬规矩；机器判据（对比上一个 `mc-v*` 标签）本轮未实现，已记在报告 §六。
+
 ## Consequences
 
 **变好的**：
