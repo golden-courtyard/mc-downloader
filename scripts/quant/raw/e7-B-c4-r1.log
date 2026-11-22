@@ -1,0 +1,12 @@
+1795357323.353461 ev=req tid=800 start=0 end=1073741823 len=1073741824 method=HEAD status=200 has_range=0 forced_full=0
+1795357323.353512 ev=done tid=800 status=200 sent=0 has_range=0 len=1073741824 secs=0.000246
+1795357323.366594 ev=req tid=96 start=0 end=1073741823 len=1073741824 method=GET status=200 has_range=1 forced_full=1
+1795357323.368767 ev=broken tid=96 status=200 sent=262144 has_range=1 len=1073741824 secs=0.002341
+1795357323.368968 ev=req tid=360 start=0 end=1073741823 len=1073741824 method=GET status=200 has_range=1 forced_full=1
+1795357323.369532 ev=req tid=656 start=0 end=1073741823 len=1073741824 method=GET status=200 has_range=1 forced_full=1
+1795357323.370089 ev=broken tid=360 status=200 sent=262144 has_range=1 len=1073741824 secs=0.002035
+1795357323.371869 ev=broken tid=656 status=200 sent=262144 has_range=1 len=1073741824 secs=0.002475
+1795357323.372598 ev=req tid=96 start=0 end=1073741823 len=1073741824 method=GET status=200 has_range=1 forced_full=1
+1795357323.372859 ev=req tid=952 start=0 end=1073741823 len=1073741824 method=GET status=200 has_range=0 forced_full=0
+1795357323.373199 ev=broken tid=96 status=200 sent=0 has_range=1 len=1073741824 secs=0.001790
+1795357324.378158 ev=done tid=952 status=200 sent=1073741824 has_range=0 len=1073741824 secs=1.005709

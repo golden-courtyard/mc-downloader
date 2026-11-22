@@ -15,6 +15,8 @@ per-thread 文件、18 轮就是 967 个；它们对复核没有增量信息，�
 | `e2-windows.csv` | E2 写放大（D: 1/4/16 + C: 16 对照） | `win_round.ps1` |
 | `e6-windows.csv` | E6 预分配臂（D: 与 C:） | `win_round.ps1 -Prealloc` |
 | `e3-align.csv` | E3 三臂（legacy / before-mid / after）墙钟与片参数 | `bash kali_quant.sh e3` |
+| `e7-fallback.csv` | E7 五臂（A-c4 / B-c4 / A-c1 / B-c1 / C-stream）交错三轮：请求数、被拒请求数、额外下发字节、墙钟、SHA1 | `bash kali_e7.sh` |
+| `e7-B-c4-r1.log` / `e7-B-c4-r1.out` | 代表性一轮：源端逐请求记录（含 `ev=broken` 的被 abort 响应）+ 客户端出现回退行的那次输出 | 同上 |
 | `e3-align-before.txt` / `e3-align-after.txt` | **判据本身**：每次数据写的 `lseek` 偏移与长度、`off % 4096` | `python hops.py <strace> --offsets …` |
 
 原始 per-thread strace（`e1f-*` / `e3f-*`）、逐轮 `out-*.log` / `err-*.log`、假源访问日志

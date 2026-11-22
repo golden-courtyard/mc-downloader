@@ -90,6 +90,24 @@ def e1_table():
     return out
 
 
+
+
+def e7_table():
+    rs = rows("e7-fallback.csv")
+    out = []
+    for arm in ("A-c4", "B-c4", "A-c1", "B-c1", "C-stream"):
+        g = [r for r in rs if r["arm"] == arm]
+        if not g:
+            continue
+        out.append((arm, len(g),
+                    f2(med([float(r["wall_s"]) for r in g])),
+                    int(med([float(r["reqs"]) for r in g])),
+                    int(med([float(r["range_reqs"]) for r in g])),
+                    int(med([float(r["range_reqs"]) for r in g])) - int(med([float(r["resp206"]) for r in g])),
+                    int(med([float(r["sent_on_range_reqs"]) for r in g])),
+                    "yes" if all(r["sha1_ok"] == "1" for r in g) else "NO"))
+    return out
+
 def main():
     md = "--md" in sys.argv
     if md:
@@ -115,6 +133,13 @@ def main():
             print("|---|---|---|---|---|")
             for r in e5:
                 print(f"| {r['arm']} | {r['conns']} | {r['retry']} | {r['reqs']} | {r['exit']} |")
+        e7 = e7_table()
+        if e7:
+            print("\n### E7")
+            print("| arm | n | wall_s | reqs | range_reqs | rejected_range | extra_bytes | sha1_ok |")
+            print("|---|---|---|---|---|---|---|---|")
+            for r in e7:
+                print("| " + " | ".join(str(x) for x in r) + " |")
         e3 = rows("e3-align.csv")
         if e3:
             print("\n### E3")
