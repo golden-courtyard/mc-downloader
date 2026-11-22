@@ -50,7 +50,8 @@ Status: implemented
   `proposed/architecture/2026-11-22-write-locality.md`。
 - 单测证据：`piece_size_is_page_aligned`、`every_piece_starts_on_page_boundary`、
   `floor_to_page_rounds_down_and_keeps_the_floor`、`state_roundtrip_preserves_non_default_conns`、
-  `state_with_unaligned_piece_size_is_rejected`（`cargo test --lib` 139 passed）。
+  `state_with_unaligned_piece_size_is_rejected`（2026-11-22 核：`cargo test --lib` 138 passed ——
+139 减去随后删掉的两条重复 `split_for` 用例、加上 `line_never_announces_completion`）。
 - 实测证据（strace 前后对照，Kali/Linux，96 MiB + `--piece-conns 7`）：
   **改前 6/7 个 `lseek` 偏移不是 4096 的倍数**（14,380,470 / 28,760,940 / 43,141,410 …，余数 3510、2924、2338…），
   **改后 0/8 违规**（14,376,960 = 3510×4096；末片 24,576 B 止于 EOF，起点仍对齐）。

@@ -1,6 +1,8 @@
 # Agent Note: fetch 的落地名从 URL 推导，已存在默认拒绝
 
-Status: implemented — issue [#1](https://github.com/golden-courtyard/mc-downloader/issues/1)，`--force` 与推导规则已落地
+Status: implemented
+
+> 对应 issue [#1](https://github.com/golden-courtyard/mc-downloader/issues/1)
 
 ## Problem
 

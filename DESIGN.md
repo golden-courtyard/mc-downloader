@@ -2,6 +2,11 @@
 
 > 2026-10-21 ｜ 状态：accepted ｜ 依据：与 lmq 关于「DeepSeek 调度/缓存能否迁移到下载器」的讨论
 > 基线：Rust 1.99.1 · Edition 2024
+>
+> **本文是 v0.4 期的设计任务书，不等于当前实现**（2026-11-22 补）。当前权威在别处：
+> 怎么用 → `README.md` / `docs/usage.md`；改代码不能踩什么 → `AGENTS.md`；
+> 「为什么这样、放弃了什么」→ `.agents/notes/`；**行为以代码为准**。
+> 本文与那三处冲突时以它们为准。**§3.1 已按现状改写**，其余小节仍是 v0.4 当时的设计记录，未逐节复核。
 
 ---
 
@@ -62,31 +67,37 @@
 ### 3.1 设计
 
 ```
-文件 → 切成固定 4 MB 分片 → 位图记录状态 → 全局队列调度 → 多连接拉取
+文件 → 按 size/conns 切片（夹逼 1–16 MiB，向下取整到 4 KiB）→ 位图记录状态 → 全局队列调度 → 多连接拉取
 ```
 
 **PieceTable**（学 block table）：
 
 ```rust
-struct PieceTable {
-    piece_size: u64,      // 默认 4 MB，按文件大小自适应
-    total: u32,           // 分片数
-    bitmap: Vec<u64>,     // 每 bit 一片：0 未完成 / 1 完成
-    inflight: HashSet<u32>,
+struct PieceTable {          // 现状：src/piece.rs
+    file_size: u64,          // 整个文件大小
+    piece_size: u64,         // clamp(file_size / conns, 1 MiB, 16 MiB) 再取整到 4096
+    total: u32,              // 分片数
+    bitmap: Vec<u64>,        // 每 bit 一片：0 未完成 / 1 完成
 }
 ```
 
-**位图开销**：10 GB / 4 MB = 2560 片 ⇒ **320 字节**。
+（v0.4 原稿里还有 `inflight: HashSet<u32>` —— **没有落地**：在飞集合由调度器队列本身承担。）
 
-**分片大小自适应**（学 aria2 的 `min-split-size`）：
+**位图开销**：10 GiB 配 4 连接 ⇒ 片 = 2.5 GiB 被上限夹到 16 MiB ⇒ 640 片 ⇒ **80 字节**。
 
-| 文件大小 | 分片 | 理由 |
-|---|---|---|
-| < 8 MB | **不分片**（单连接）| 握手开销 > 收益（MC 模组全在这个区间）|
-| 8 MB – 256 MB | 4 MB | |
-| > 256 MB | 16 MB | 减少分片数量，降低调度开销 |
+**分片大小规则**（现状；**不是** v0.4 原稿的「8–256 MB 用 4 MB / >256 MB 用 16 MB」）：
+
+| 条件 | 片大小 |
+|---|---|
+| `size < 8 MiB` | **不分片**（单流）|
+| 否则 | `clamp(size / piece_conns, 1 MiB, 16 MiB)`，再**向下取整到 4 KiB** |
 
 **⚠️ 这条是本设计的核心**：**小文件不分片**——不是偷懒，是 aria2 的默认策略（`min-split-size=20M`），也是 MC 场景的实际情况。
+
+切片策略的两次演进与取舍见
+[片大小耦合](.agents/notes/implemented/architecture/2026-10-27-piece-size-coupled-to-fanout.md) 与
+[页对齐](.agents/notes/implemented/architecture/2026-11-22-piece-page-alignment.md)；
+**并发数是不是瓶颈**的实测见 `quant-report-20261122.md` 的 E1。
 
 ### 3.2 落点
 

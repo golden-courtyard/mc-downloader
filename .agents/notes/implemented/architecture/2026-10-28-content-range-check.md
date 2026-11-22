@@ -1,6 +1,6 @@
 # Agent Note: 分片下载必须校验 Content-Range 起点
 
-Status: proposed — 校验代码已落地（`src/download.rs::check_content_range`），本文记录**为什么这么判**以及**放弃了什么**
+Status: implemented
 
 ## Problem
 
@@ -60,12 +60,16 @@ Status: proposed — 校验代码已落地（`src/download.rs::check_content_ran
 - **行为变更面**：以前"206 但不带 `Content-Range`"的畸形服务器能下成功，现在硬失败。
   这类服务器不合 RFC 7233（206 必须带 `Content-Range`），判死是**有意的**；
   但确实存在"以前能过、现在过不了"的源。
-- **`record_failure` 对本次下载是空写**：`pool.pick()` 全仓只有一个生产调用点
-  （`one_split` 建 `PieceJob` 时），之后 `sched.close()`；重试走
-  `url_of(pj.source_idx)`，源不会变。保留它是为将来"重试时重选源"留的占位 ——
-  代码里已就地注明，别让下一个人以为它真的在换源。
-- **待补测试：`206 缺 Content-Range` 那个分支零覆盖**。
-  它是三行 `ok_or_else`，写错的概率极低；要覆盖得搭 HTTP 桩，
-  收益主要在"验证失败时不写盘"（那是另一个课题：**校验失败必须确保没写出去**）。
+- **`total` 只校验格式、不比对文件大小**：这条取舍**已被重新提起**（issue #7 的方案 A：把
+  `Content-Range` 的总长与 `job.size` 比对，让"远端对象中途被换"报精确错误）。
+  本文保留原判据（要在这里比就得改 `fetch_piece` 签名）；改判要等 #7 的结论，别两边同时改。
+- **`record_failure` 不再"空写"**（2026-11-22 更正）：原记录说源不会变，是因为当时只有
+  `one_split` 建 job 时调一次 `pick()`。现在 `one_split` 每个分片带 `tried: Vec<usize>`，
+  重试会换源、无源可换时抛 `SourcesExhausted` —— `record_failure` / `record_success`
+  喂的 EWMA 与 `fail_streak` **是有消费者的**。原结论作废，改由
+  `source.rs` 的注释与 `one_split` 的重试环承重。
+- **`206 缺 Content-Range` 这个分支仍零覆盖**：三行 `ok_or_else`，写错概率低；
+  要覆盖得搭 HTTP 桩 —— 桩现在有了（`tests/http_semantics.rs` 的 `FaultServer`），
+  补一条就是十几行的事，见 #2 收尾时留下的清单。
 - **`pj.end == 0` 会 `end - 1` underflow panic**：本次未引入新风险
   （`Range` 请求头早就在做这个减法），且切片保证 `end > start`。记录在案，不在本次范围。
