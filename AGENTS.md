@@ -38,7 +38,7 @@
 ```bash
 cargo fmt --all                                     # ① 格式（pre-commit 门会拦）
 cargo clippy --all-targets --locked -- -D warnings   # ② lint（-D warnings = 警告即错）
-CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（lib 当前 140 条）
+CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（lib 当前 153 条）
 cargo build --release                               # ④ 产物：target/release/mc-downloader.exe
 ```
 
@@ -57,7 +57,7 @@ cargo 下一轮往里写 `dep-graph.part.bin` 时被拒 ⇒ `exit 101` + `error:
 
 ### 测试策略：两类，分工不同
 
-**现有 140 条 lib 单元测试 + 36 条集成测试（19 参数化 + 5 属性 + 7 HTTP 语义 + 5 Linux 语义），只覆盖「能想到的失败」。** 真实网络行为（丢包、RST、半关闭、
+**现有 153 条 lib 单元测试 + 37 条集成测试（19 参数化 + 5 属性 + 8 HTTP 语义 + 5 Linux 语义），只覆盖「能想到的失败」。** 真实网络行为（丢包、RST、半关闭、
 `Content-Length` 与实际不符）靠 **Kali 做中间人/服务端**、宿主侧配合测出来，
 记录在 `net_faults-report-*.md`。
 
@@ -125,7 +125,7 @@ src/
 
 ---
 
-## 五、七个必须知道的坑（全部有实测记录）
+## 五、八个必须知道的坑（全部有实测记录）
 
 | 坑 | 判据 / 症状 |
 |---|---|
@@ -136,6 +136,7 @@ src/
 | **只有 `.part` 没有 `.part.state` 时必须从头下** | 稀疏文件的空洞读出来是 0，**宁可重下不拼坏文件** |
 | **续传判据必须用同一个 `piece_conns`** | 片大小是 `size / conns` 的函数：`PieceState::load` 曾固定按 conns=4 重建判据，于是 `--piece-conns 8` 的续传永远判过期、**静默从头重下**（不报错）。现在走 `load_with_conns(part, size, opts.piece_conns)`（2026-11-22 修，#5） |
 | **服务器对 Range 回 200 不是错误，是要降级** | 200 的 body 就是整份 ⇒ 该退回 `one_stream`，不要 `bail` 掉整批。`fetch_piece` 吐 `RangeUnsupported` 标记，`one_split` 收到后先 abort 余下 worker、再截断 `.part` 重下（残留竞态写在类型注释里）。416 / 5xx 仍然照常失败（2026-11-22，#6） |
+| **落点路径可能来自别人，必须过 `pathsafe`** | 三处来源：URL 末段（**percent-decode 之后**才见真章）、整合包清单（`files[].path` / CurseForge `file_name`）、zip 条目名。一律走 `crate::pathsafe::{check_name, check_rel, under_root}`。**`PathBuf::join` 遇绝对路径会整体替换**（`join("C:\\x")` ⇒ `C:\x`），只查 `..` 挡不住 —— 2026-11-22 复现过越界写并修复，见 `implemented/bug-fix/2026-11-22-path-safety.md` |
 
 ---
 

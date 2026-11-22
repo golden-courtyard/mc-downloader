@@ -75,8 +75,21 @@ pub fn parse_index(text: &str) -> Result<PackSpec> {
             // 没有下载地址的条目（规范允许）只能跳过
             continue;
         };
+        // `files[].path` 来自**别人写的整合包清单**，不能直接当落点：
+        // 恶意包写 `../../evil.jar` 就能把文件丢到实例目录之外。
+        // 这里立刻拒（而不是改名）：坏清单该被看见，不该被悄悄"修好"。
+        let rel = f.path.replace('\\', "/");
+        let path = crate::pathsafe::check_rel(&rel)
+            .with_context(|| {
+                format!(
+                    "整合包清单里的 files[].path 不安全，拒绝安装: {rel:?}（包名 {name:?}）",
+                    name = idx.name.as_deref().unwrap_or("(未命名)")
+                )
+            })?
+            .to_string_lossy()
+            .replace('\\', "/");
         files.push(PackEntry {
-            path: f.path.replace('\\', "/"),
+            path,
             url,
             sha1: f.hashes.get("sha1").cloned(),
             size: f.file_size,
@@ -217,6 +230,32 @@ mod tests {
             r#"[{"path":"mods\\sub\\a.jar","downloads":["https://cdn/a.jar"]}]"#,
         );
         assert_eq!(parse_index(&text).unwrap().files[0].path, "mods/sub/a.jar");
+    }
+
+    /// `files[].path` 是**别人写的清单**：`..` 必须整条拒（不是改名放行）。
+    ///
+    /// 换个角度看：这条测的也是"错误里能看见是哪一条"——不然用户只知道"这个包装不了"。
+    #[test]
+    fn traversal_in_files_path_is_rejected() {
+        for bad in [
+            r#"../../evil.jar"#,
+            r#"/etc/evil.jar"#,
+            r#"mods/../../../evil.jar"#,
+            r#"C:/Windows/evil.jar"#,
+        ] {
+            let text = idx(
+                r#"{"minecraft":"1.21.1"}"#,
+                &format!(r#"[{{"path":"{bad}","downloads":["https://cdn/a.jar"]}}]"#),
+            );
+            let e = format!("{:#}", parse_index(&text).unwrap_err());
+            assert!(e.contains("不安全"), "应点明是不安全路径: {bad} -> {e}");
+        }
+        // 合法子目录照旧
+        let ok = idx(
+            r#"{"minecraft":"1.21.1"}"#,
+            r#"[{"path":"mods/a.jar","downloads":["https://cdn/a.jar"]}]"#,
+        );
+        assert_eq!(parse_index(&ok).unwrap().files[0].path, "mods/a.jar");
     }
 
     #[test]

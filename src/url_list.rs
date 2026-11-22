@@ -102,7 +102,17 @@ pub fn filename_from_url(url: &str) -> Option<String> {
     if last.is_empty() {
         return None;
     }
-    Some(percent_decode(last))
+    // 解码**之后**才见真章：`%2e%2e%2f%2e%2e%2fpwned.bin` 解出来是 `../../pwned.bin`。
+    // 校验放在解码之后、返回之前 —— 这一层是"最后一个能拦住它的地方"。
+    let decoded = percent_decode(last);
+    match crate::pathsafe::check_name(&decoded) {
+        Ok(name) => Some(name),
+        Err(_) => {
+            // 不静默改名、也不静默丢弃：说清是哪一段被拒，交给调用方回落到 `out.bin`
+            eprintln!("[!] URL 末段解出来不是合法文件名，已忽略：{decoded:?}");
+            None
+        }
+    }
 }
 
 /// 最小 percent-decode（只处理 `%XX`，其余原样）。
@@ -258,5 +268,33 @@ https://a.com/2.zip
             assert_eq!(n, "out.bin", "{url}");
             assert!(fell_back, "{url} 必须报告回落，不能静默");
         }
+    }
+
+    /// 攻击者可控的落点名：末段 percent-decode 之后是 `../..`，必须推不出名字。
+    ///
+    /// 这条锁的是"解码之后才校验"的顺序——先校验再解码等于没校验。
+    /// 注意只有**末段**参与取名：`http://h/a/%2e%2e/%2e%2e/x.bin` 的落点名是 `x.bin`（合法），
+    /// 中间段的 `..` 由 HTTP 服务器自己解析，不是我们的文件名问题。
+    #[test]
+    fn traversal_in_last_segment_is_rejected() {
+        for url in [
+            "http://h/loot/%2e%2e%2f%2e%2e%2fpwned.bin",
+            "http://h/x/%2e%2e%5c%2e%2e%5cpwned.bin",
+            "http://h/a/..%2f..%2fpwned.bin",
+            "http://h/a/%2e%2e%2fx.bin",
+        ] {
+            assert!(filename_from_url(url).is_none(), "应拒: {url}");
+        }
+        // 合法名不受影响（含中文与空格）
+        assert_eq!(filename_from_url("http://h/a/b.bin").unwrap(), "b.bin");
+        assert_eq!(
+            filename_from_url("http://h/a/%E4%B8%AD%20%E6%96%87.jar").unwrap(),
+            "中 文.jar"
+        );
+        // 中间段的 `..` 与我们无关：HTTP 服务器解析路径，落点名只看末段
+        assert_eq!(
+            filename_from_url("http://h/a/%2e%2e/%2e%2e/x.bin").unwrap(),
+            "x.bin"
+        );
     }
 }

@@ -280,7 +280,11 @@ async fn one(
     opts: &DownloadOpts,
     pg: &Arc<Progress>,
 ) -> Result<(String, bool)> {
-    let dst = root.join(&job.path);
+    // 落点必须过 `pathsafe`：`job.path` 可能来自 URL 末段、整合包清单或 CurseForge 的
+    // `file_name` —— 全是不可信输入，而 `PathBuf::join` 遇到绝对路径会**整体替换**，
+    // 光看"像不像相对路径"挡不住。
+    let dst = crate::pathsafe::under_root(root, Path::new(&job.path))
+        .with_context(|| format!("目标路径不安全，拒绝落盘: {}", job.path))?;
 
     // 已存在且 sha1 匹配 => 跳过（断点续传）
     if dst.exists() {

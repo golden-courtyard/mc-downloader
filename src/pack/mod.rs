@@ -64,12 +64,17 @@ pub async fn install(pack: &Path, root: &Path, opts: &DownloadOpts) -> Result<()
     // ⑥ 覆盖层：解压可能很重，扔到 blocking 线程池，别占着 async worker
     let prefixes = spec.override_prefixes.clone();
     let inst_for_extract = inst.clone();
-    let copied = tokio::task::spawn_blocking(move || {
+    let (copied, skipped_during_extract) = tokio::task::spawn_blocking(move || {
         extract_overrides(&mut zip, &prefixes, &inst_for_extract)
     })
     .await
     .context("覆盖层解压任务失败")??;
     println!("[+] overrides: {copied} 个文件");
+    if skipped_during_extract > 0 {
+        println!(
+            "[!] overrides: 跳过 {skipped_during_extract} 个路径不安全的条目（包里可能塞了 `..` / 绝对路径）"
+        );
+    }
 
     println!("[+] 完成 -> {}", inst.display());
     println!("[i] 把启动器的游戏目录指向 {} 即可。", root.display());
@@ -171,8 +176,14 @@ async fn install_curseforge(
 
     // 覆盖层：CF 的 `overrides` 值实测都是 "overrides"
     let prefixes = vec!["overrides/".to_string()];
-    let copied = extract_overrides(zip, &prefixes, root)?;
+    let (copied, skipped) = extract_overrides(zip, &prefixes, root)?;
     println!("[+] overrides: {copied} 个文件");
+    if skipped > 0 {
+        // 跳过而不是整包失败：一个坏条目不该毁掉整次安装；但必须让人看见
+        println!(
+            "[!] overrides: 跳过 {skipped} 个路径不安全的条目（可能有人在包里塞了 `..` 或绝对路径）"
+        );
+    }
     println!("[+] 完成 -> {}", root.join("mods").display());
     Ok(())
 }
@@ -195,8 +206,9 @@ fn extract_overrides(
     zip: &mut zip::ZipArchive<File>,
     prefixes: &[String],
     inst: &Path,
-) -> Result<usize> {
+) -> Result<(usize, usize)> {
     let mut copied = 0usize;
+    let mut skipped = 0usize;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i)?;
         let name = entry.name().to_string();
@@ -209,7 +221,20 @@ fn extract_overrides(
         if rel.is_empty() {
             continue;
         }
-        let dst = inst.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+        // zip 条目名是**包作者写的**：`overrides/../../evil` 就能逃出实例目录。
+        // `zip` crate 的 `enclosed_name()` 做的是同一件事，但它对 `C:` 之类返回 None
+        // 而不给原因；这里过一遍 `pathsafe` 才能把"为什么拒"讲清楚，并统一 Windows 规则。
+        let rel_path = match crate::pathsafe::check_rel(rel) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[!] 跳过可疑 override 条目 {name:?}: {e:#}");
+                skipped += 1;
+                continue;
+            }
+        };
+        // 再用同一套判定确认落点仍在实例目录之下（符号链接那层也一并走过）
+        let dst = crate::pathsafe::under_root(inst, &rel_path)
+            .with_context(|| format!("override 条目落点不安全: {name:?}"))?;
         if let Some(parent) = dst.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -218,7 +243,7 @@ fn extract_overrides(
         std::fs::write(&dst, buf)?;
         copied += 1;
     }
-    Ok(copied)
+    Ok((copied, skipped))
 }
 
 #[cfg(test)]
@@ -314,9 +339,10 @@ mod tests {
 
         let inst = std::env::temp_dir().join(format!("mcd-inst-{}", std::process::id()));
         std::fs::create_dir_all(&inst).unwrap();
-        let n = extract_overrides(&mut z, &spec.override_prefixes, &inst).unwrap();
+        let (n, skipped) = extract_overrides(&mut z, &spec.override_prefixes, &inst).unwrap();
 
         assert_eq!(n, 2);
+        assert_eq!(skipped, 0, "合法条目不该被跳过");
         assert_eq!(
             std::fs::read_to_string(inst.join("config").join("a.toml")).unwrap(),
             "x=1"
@@ -330,6 +356,44 @@ mod tests {
         let _ = std::fs::remove_file(&p);
         let _ = std::fs::remove_file(inst.join("options.txt"));
         let _ = std::fs::remove_file(inst.join("config").join("a.toml"));
+        let _ = std::fs::remove_dir(inst.join("config"));
+        let _ = std::fs::remove_dir(&inst);
+    }
+
+    /// 恶意 zip：条目名带 `..` 时**跳过并计数**，既不能写到实例目录之外，也不能整包失败。
+    #[test]
+    fn hostile_override_entry_is_skipped_and_counted() {
+        let tag = format!("ov-evil-{}", std::process::id());
+        let p = make_zip(
+            &tag,
+            &[
+                (
+                    mrpack::INDEX_NAME,
+                    r#"{"dependencies":{"minecraft":"1.21.1"}}"#,
+                ),
+                ("overrides/../../escaped.txt", "pwned"),
+                ("overrides/config/ok.toml", "x=1"),
+            ],
+        );
+        let mut z = zip::ZipArchive::new(File::open(&p).unwrap()).unwrap();
+
+        let inst = std::env::temp_dir().join(format!("mcd-inst-evil-{}", std::process::id()));
+        std::fs::create_dir_all(&inst).unwrap();
+        let (copied, skipped) =
+            extract_overrides(&mut z, &["overrides/".to_string()], &inst).unwrap();
+
+        assert_eq!(copied, 1, "合法条目照常落盘");
+        assert_eq!(skipped, 1, "穿越条目必须被跳过并计数");
+        let escaped = inst.parent().unwrap().join("escaped.txt");
+        assert!(
+            !escaped.exists(),
+            "不许写到实例目录之外: {}",
+            escaped.display()
+        );
+        assert!(inst.join("config").join("ok.toml").exists());
+
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(inst.join("config").join("ok.toml"));
         let _ = std::fs::remove_dir(inst.join("config"));
         let _ = std::fs::remove_dir(&inst);
     }

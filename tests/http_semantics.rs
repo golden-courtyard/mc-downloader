@@ -741,3 +741,34 @@ async fn declared_size_is_a_hint_not_a_check() {
         "成品内容必须与服务器发出的前 {SMALL_BODY} 字节逐字节一致（sha1）"
     );
 }
+
+/// 落点校验是最后一道闸：`job.path` 若被别的入口塞进 `../`，必须在**任何网络动作之前**被拒。
+///
+/// URL 指向一个必然连不上的端口（127.0.0.1:1）：如果实现先发请求再校验路径，这条会因
+/// 连接错误而失败，而不是报「目标路径不安全」——于是"检查在请求之前"这件事被顺序钉住。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn job_path_traversal_is_rejected_before_any_network_action() {
+    let dir = TempDir::new("job-path-traversal");
+    let job = Job {
+        url: "http://127.0.0.1:1/never".to_string(),
+        path: "../escaped.bin".to_string(),
+        sha1: None,
+        size: Some(1024),
+        mirrors: Vec::new(),
+    };
+
+    let err = run(std::slice::from_ref(&job), dir.path(), &test_opts())
+        .await
+        .expect_err("穿越路径必须被拒");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("目标路径不安全"),
+        "应报路径问题（而不是连接失败）: {msg}"
+    );
+    let escaped = dir.path().parent().unwrap().join("escaped.bin");
+    assert!(
+        !escaped.exists(),
+        "不许写到目标目录之外: {}",
+        escaped.display()
+    );
+}
