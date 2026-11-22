@@ -86,7 +86,10 @@ RustSec 的 `zip-slip` 关键词下同时挂着六条（2026 年内）：
 | **mod jar 就是代码** | **挡不住**：我们只负责放到 `mods/`，用户下次启动游戏就会执行 | 这是产品定位，不是缺陷；能做的只有**不自动运行**（我们确实不运行）与文档警告 |
 | **哈希自证** | `.mrpack` 的 `sha1` 与 `downloads` 出自同一份 `modrinth.index.json`；CurseForge 的 `sha1` 也来自同一次 API 响应 | ⇒ 哈希只能证明**传输完整**，不能证明**来源可信**。任何人能改清单就能同时改哈希 |
 | **`fetch` / `generic` 无 `--sha1`** | 当前**接受**：`fetch` 不要求校验和 | 用户从野站下东西时，等于"任意内容直接落盘"。要挡得加 `--require-sha1` 之类的显式开关（**未实现**，记入待办） |
-| **杀软/沙箱** | 不适用 | 见 §2.2：这类样本在 VT 上常常全绿 |
+| **杀软/沙箱** | **不能当 gate**。本机实测（2026-11-22）：`root\SecurityCenter2` 只登记了 Windows Defender，而 Defender 的 `AMServiceEnabled` / `RealTimeProtectionEnabled` / `AntivirusEnabled` 三项全是 `False`；真正在跑的**火绒 6.0.0.1** 不在 SecurityCenter2 里。火绒官方只给 `HipsMain.exe -s "<路径>"`（仅自定义查杀；且明确"不支持打印安全日志的参数、指令"） | 见 §2.2（这类样本在 VT 上常常全绿）与 `docs/reports/platform-abilities-20261123.md` §A：**能把扫描拉起来给人看，不能当 gate**；输出里不许出现"已扫描 / 通过 / 安全" |
+
+> 本节只给攻击面判定；"本机/两平台上有什么可调、值不值得用"的完整清单（火绒 / Windows / Linux / HTTP）
+> 见 [`platform-abilities-20261123.md`](platform-abilities-20261123.md)，那里每条都带判据与代价。
 
 ### 3.2 路径级（已修）
 
@@ -113,7 +116,10 @@ RustSec 的 `zip-slip` 关键词下同时挂着六条（2026 年内）：
 
 其余未测项（按价值排序）：**重定向换对象**（302 后拿到另一个文件 → 现在只有 #7A 的总长比对能抓）、
 **`Content-Encoding: gzip` 强压**（`reqwest` 未启 gzip feature ⇒ 压缩字节会被当正文写入，`fetch` 无 sha1 时静默坏文件）、
-slowloris、TLS 自签、恶意代理改写响应。
+**`429/503` 的归因**（分片路径现在把所有非 206/200/416 都报成「服务器不支持 Range」，`download.rs:907`；
+`Retry-After` 在下载路径也没读，退避是纯 `1 << attempt` ⇒ 排查会被引向相反方向）、
+slowloris、TLS 自签、恶意代理改写响应。其中 `429/503` 这条的判据与代价见
+[`platform-abilities-20261123.md`](platform-abilities-20261123.md) §D；前两条见本报告 §5。
 
 ### 3.4 来源级（代码挡不住，只能靠产品约束与文档）
 

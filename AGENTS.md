@@ -38,7 +38,7 @@
 ```bash
 cargo fmt --all                                     # ① 格式（pre-commit 门会拦）
 cargo clippy --all-targets --locked -- -D warnings   # ② lint（-D warnings = 警告即错）
-CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（lib 当前 156 条）
+CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（lib 当前 164 条）
 cargo build --release                               # ④ 产物：target/release/mc-downloader.exe
 ```
 
@@ -57,7 +57,7 @@ cargo 下一轮往里写 `dep-graph.part.bin` 时被拒 ⇒ `exit 101` + `error:
 
 ### 测试策略：两类，分工不同
 
-**现有 156 条 lib 单元测试 + 37 条集成测试（19 参数化 + 5 属性 + 8 HTTP 语义 + 5 Linux 语义），只覆盖「能想到的失败」。** 真实网络行为（丢包、RST、半关闭、
+**现有 164 条 lib 单元测试 + 37 条集成测试（19 参数化 + 5 属性 + 8 HTTP 语义 + 5 Linux 语义），只覆盖「能想到的失败」。** 真实网络行为（丢包、RST、半关闭、
 `Content-Length` 与实际不符）靠 **Kali 做中间人/服务端**、宿主侧配合测出来，
 记录在 `docs/reports/net_faults-report-*.md`。
 
@@ -97,7 +97,7 @@ cargo 下一轮往里写 `dep-graph.part.bin` 时被拒 ⇒ `exit 101` + `error:
 git config core.hooksPath .githooks      # 装了之后，暂存有 .rs 就跑 cargo fmt --check
 ```
 
-**CI**：`.github/workflows/ci.yml` 跑 ①②③④（CI 不在沙箱里，③ 不需要 `CARGO_INCREMENTAL=0`）。**推送后要真的看结果**（`gh run watch`），
+**CI**：`.github/workflows/ci.yml` 跑四个 job —— `check`（ubuntu：fmt → shell 语法 → clippy → test → release build）、`check-windows`（发布物是 `.exe`，Windows 专属分支只能在这跑）、`msrv`（`toolchain: 1.99` + `--locked`，让 `rust-version` 不是一句注释）、以及测试条数下限（`0 tests` 与 passed 同外观，只能靠数量守）。**推送后要真的看结果**（`gh run watch`），
 不要把"push 成功"当成"CI 通过"。
 
 ---
