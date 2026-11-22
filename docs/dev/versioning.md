@@ -84,7 +84,30 @@ release(mc): 0.7.0
 版本号如果能把"这一版包含哪些决策"直接映射出来，就不需要另写一份 release notes 解释自己；
 反过来，一个版本若既找不到对应的 note、又说不清为什么跳位，那它大概**不该发**。
 
-## 五、什么时候才配 1.0
+## 五、工具与闸门（对标 dsh 的做法）
+
+dsh 的版本规则**不在文档里**，而在三处：一个 bump 命令、一个一致性检查、一份决策记录。
+我们照这个结构做了同样三件事 —— 文档只是索引，真正生效的是工具。
+
+| 角色 | dsh | 这里 |
+|---|---|---|
+| 抬版本并写进仓库 | `scripts/release/bump.ts`（改清单 + 锁文件，**提交**，由人打标签） | `scripts/bump-version.sh <minor\|patch\|x.y.z>` |
+| 一致性闸门 | `scripts/verify-version-sync.ts` | `tests/version_sync.rs`（`cargo test` 里跑） |
+| 规则本身 | `.agents/notes/implemented/process/2026-08-10-npm-release-sequences.md` | 本文 + `.agents/notes/implemented/process/2026-11-23-versioning-tied-to-notes.md` |
+
+三条从 dsh 直接搬过来、且我们认可的原则：
+
+1. **版本写在仓库里，CI 不写仓库**：bump 是一次本地提交（改 `Cargo.toml` + `Cargo.lock` + `CHANGELOG`），
+   合并后**由人打标签**。发布物因此永远能追到某个提交，CI 也不需要写权限。
+2. **闸门是静态检查**：`tests/version_sync.rs` 查三件事 —— 版本是合法 semver；CHANGELOG 有对应版本节；
+   **在 tag 上构建时**标签必须等于 `mc-v<version>`。本地跑没有 `GITHUB_REF_NAME` 就跳过这一条。
+3. **预发布有明确次序**：SemVer 按字母序比较预发布标识 —— `alpha` < `beta` < `canary` < `rc` < 正式版。
+   我们只用 `alpha` 与 `rc`，但次序规则一样适用：**rc 一定高于同号的 alpha**。
+
+不照搬的部分（规模差异）：dsh 有**三条独立的发布序列**（dsh / vendor / native），各有版本基线、前缀与工作流；
+我们只有一个产物，一条序列就够。它的 `dist-tag`（`latest`/`next`）也与我们无关 —— 我们发布的是二进制。
+
+## 六、什么时候才配 1.0
 
 四条同时满足才行，缺一条就继续 0.x：
 
@@ -93,7 +116,7 @@ release(mc): 0.7.0
 - [ ] **已知缺口都处理或明确不修**：issue 里没有"我们知道但不打算修"的隐身项；
 - [ ] **有人依赖它**：至少一个外部使用者在真实场景用过一个版本周期。
 
-## 六、发布流程里对应哪几步
+## 七、发布流程里对应哪几步
 
 见 [release.md](release.md)。与本文件相关的三步：
 

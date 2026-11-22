@@ -23,7 +23,9 @@ cargo build --release --locked
 - [ ] `Cargo.toml` 版本号按 [versioning.md](versioning.md) §四**从 notes 推导**：
       改契约的 `implemented` ⇒ minor；只有 `bug-fix` ⇒ patch；只有 `proposed` ⇒ 不发版；**不跳号**
 - [ ] `release(mc): x.y.z` 提交的正文**列出本次包含的 note 路径**（三行内），让"为什么跳这一位"可查
-- [ ] `Cargo.lock` 跟着更新（`cargo build` 一次即可，diff 应只有本包那一行）
+- [ ] `Cargo.lock` 跟着更新：用 `scripts/bump-version.sh <minor|patch|x.y.z>` 抬版本
+      （它一次改掉 `Cargo.toml`、冻结 CHANGELOG、刷新 `Cargo.lock`），然后
+      `cargo test --test version_sync --locked` 通过（版本 / CHANGELOG / 标签三者一致）
 - [ ] `docs/user/usage.md` 里新增/变更的参数都有条目
 - [ ] 文档 emoji 扫描为 0（仓库规矩）
 - [ ] `.agents/notes/` 里本次的持久决策已写（没有就说明这次只是机械改动）

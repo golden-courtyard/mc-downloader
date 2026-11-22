@@ -98,7 +98,8 @@ src/
 - 文档不用 emoji。
 - 改了行为/参数，同一次提交里更新 `README.md` 的「验证状态」与 `docs/user/usage.md`。
 - 发布流程见 [docs/dev/release.md](docs/dev/release.md)（含"本地绿不等于 CI 绿"这条）；
-  版本号怎么跳、标签长什么样见 [docs/dev/versioning.md](docs/dev/versioning.md)。
+  版本号怎么跳、标签长什么样见 [docs/dev/versioning.md](docs/dev/versioning.md)；
+  抬版本用 `scripts/bump-version.sh`，一致性由 `tests/version_sync.rs` 在 `cargo test` 里守。
 
 ## 8 已知的边界（别当 bug 修）
 
