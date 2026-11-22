@@ -48,13 +48,123 @@ pub struct Settings {
     pub max_speed: Option<String>,
     /// 是否给可执行文件打 MotW
     pub motw: Option<bool>,
+    /// 下载源。**本工具不内置任何源**（issue #15）
+    #[serde(default)]
+    pub source: SourceSettings,
 }
 
+/// `[source]`：下载源。**每一项都必须由用户提供**。
+///
+/// 2026-10-20 PCL2 在 v2.99.0.0 移除 MC 下载功能（「为遵守相关法律法规」），原因不是被举报，
+/// 而是「第三方工具内置下载功能客观上存在绕过官方正版验证的可能」。本工具与它相邻，
+/// 所以采取了 community 已验证可行的形态：**把"知道去哪下"从工具移到用户**。
+///
+/// 三条硬要求（issue #15）：① 默认配置里没有任何源地址；② 代码里没有"没配就用这个"的兜底；
+/// ③ 不做自动发现（不探测、不尝试常见地址）。**第 ② 条最容易被漏** ——
+/// 任何一处 `unwrap_or("https://…")` 都会让整个决策失效。
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceSettings {
+    /// 版本清单 URL（**完整地址**，指向 `version_manifest_v2.json` 那一层）
+    pub metadata: Option<String>,
+    /// assets 基址（不带结尾 `/`）
+    pub assets: Option<String>,
+    /// Fabric loader 元数据基址
+    pub fabric: Option<String>,
+    /// Forge：`promotions_slim.json` 所在基址（maven 基址默认与它同 host）
+    pub forge: Option<String>,
+    /// NeoForge：maven 基址
+    pub neoforge: Option<String>,
+}
+
+/// 解析后的源集合：**全部必填**。
+///
+/// 缺失时的报错必须是**明确的指引**，不是"下载失败"（issue #15 §2）：
+/// 告诉用户去哪儿填，并提醒「只想下单个文件用 fetch，不需要源」。
+#[derive(Debug, Clone)]
+pub struct Sources {
+    pub metadata: String,
+    pub assets: String,
+    pub fabric: String,
+    pub forge: String,
+    pub neoforge: String,
+}
+
+impl Sources {
+    /// 从配置解析。`cfg_path` 只用于错误文案（告诉用户该改哪个文件）。
+    pub fn resolve(cfg: &SourceSettings, cfg_path: Option<&Path>) -> Result<Self> {
+        let need = |key: &str, v: &Option<String>| -> Result<String> {
+            let Some(v) = v.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+                return Err(anyhow::anyhow!(missing_source_msg(key, cfg_path)));
+            };
+            if !(v.starts_with("https://") || v.starts_with("http://")) {
+                anyhow::bail!(
+                    "[source].{key} 必须以 http:// 或 https:// 开头：`{v}`\n\
+                     \x20 这里只接受一个地址，不接受 `none` / `off` 这类取值。"
+                );
+            }
+            Ok(v.trim_end_matches('/').to_string())
+        };
+        Ok(Self {
+            metadata: need("metadata", &cfg.metadata)?,
+            assets: need("assets", &cfg.assets)?,
+            fabric: need("fabric", &cfg.fabric)?,
+            forge: need("forge", &cfg.forge)?,
+            neoforge: need("neoforge", &cfg.neoforge)?,
+        })
+    }
+
+    /// 允许的主机集合（给 Forge installer 的 host 白名单用）。
+    ///
+    /// 为什么从配置推：installer profile 里的下载 URL 是**远端给的**，不能无条件信任；
+    /// 而"信哪些 host"应当与"我配了哪些源"同源 —— 否则用户换镜像后 installer 会被自己拒掉。
+    pub fn host_of(url: &str) -> Option<String> {
+        let rest = url.split_once("://")?.1;
+        let host = rest.split(['/', '?', '#']).next()?;
+        let host = host.rsplit_once('@').map_or(host, |(_, h)| h); // 去掉 userinfo
+        Some(host.split(':').next()?.to_ascii_lowercase())
+    }
+
+    /// 配置里所有源的 host（去重）。
+    pub fn hosts(&self) -> Vec<String> {
+        let mut v: Vec<String> = [
+            &self.metadata,
+            &self.assets,
+            &self.fabric,
+            &self.forge,
+            &self.neoforge,
+        ]
+        .into_iter()
+        .filter_map(|u| Self::host_of(u))
+        .collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+}
+
+/// 缺源时的统一文案。**不要**在这里塞任何具体地址（那条判据见 issue #15）。
+fn missing_source_msg(key: &str, cfg_path: Option<&Path>) -> String {
+    let where_ = match cfg_path {
+        Some(p) => format!("请先在 {} 的 [source] 段填写 `{key}` 地址。", p.display()),
+        None => format!(
+            "还没有配置文件。请先建一个（`--config <path>` 指定，或放到平台配置目录），\
+             在 [source] 段填写 `{key}` 地址。"
+        ),
+    };
+    format!(
+        "未配置下载源（`[source].{key}`）。\n\
+         \x20 本工具不内置任何源地址 —— 这是刻意的（issue #15）。\n\
+         \x20 {where_}\n\
+         \x20 只想下单个文件？`mc-downloader fetch <url> -d <dir>` 不需要任何源。"
+    )
+}
 /// 读到的配置 + 它来自哪个文件（`None` = 没找到任何配置文件，全走默认）。
 #[derive(Debug, Default)]
 pub struct Loaded {
     pub settings: Settings,
-    pub source: Option<PathBuf>,
+    /// 这个配置是从哪个文件读来的（给错误文案用）
+    pub path: Option<PathBuf>,
 }
 
 /// 平台默认路径（不保证存在）。
@@ -109,7 +219,7 @@ pub fn load(explicit: Option<&Path>) -> Result<Loaded> {
         .with_context(|| format!("解析配置文件失败（检查键名）: {}", path.display()))?;
     Ok(Loaded {
         settings,
-        source: Some(path),
+        path: Some(path),
     })
 }
 

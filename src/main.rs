@@ -158,10 +158,12 @@ async fn main() -> Result<()> {
         timeout_secs: args.timeout,
         max_speed: args.max_speed.clone(),
         motw: args.no_motw.then_some(false),
+        // 命令行与脚本都不承载源：源属于"这台机器上有什么"（issue #15）
+        source: settings::SourceSettings::default(),
     };
     let merged = settings::merge(&[("cli", &cli_layer), ("config", &loaded.settings)], &dflt);
     if args.print_config {
-        let src = match &loaded.source {
+        let src = match &loaded.path {
             Some(p) => p.display().to_string(),
             None => "（没有配置文件，全走默认）".to_string(),
         };
@@ -216,6 +218,7 @@ async fn main() -> Result<()> {
                 timeout_secs: cfg.network.timeout_secs,
                 max_speed: cfg.download.max_speed.clone(),
                 motw: None,
+                source: settings::SourceSettings::default(),
             };
             let mut opts = settings::merge(
                 &[
