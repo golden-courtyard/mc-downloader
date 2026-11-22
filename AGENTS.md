@@ -38,7 +38,7 @@
 ```bash
 cargo fmt --all                                     # ① 格式（pre-commit 门会拦）
 cargo clippy --all-targets --locked -- -D warnings   # ② lint（-D warnings = 警告即错）
-CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（当前 130 条）
+CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（lib 当前 137 条）
 cargo build --release                               # ④ 产物：target/release/mc-downloader.exe
 ```
 
@@ -57,7 +57,7 @@ cargo 下一轮往里写 `dep-graph.part.bin` 时被拒 ⇒ `exit 101` + `error:
 
 ### 测试策略：两类，分工不同
 
-**现有 130 条是单元测试，只覆盖「能想到的失败」。** 真实网络行为（丢包、RST、半关闭、
+**现有 137 条 lib 单元测试 + 24 条集成测试（19 参数化 + 5 属性），只覆盖「能想到的失败」。** 真实网络行为（丢包、RST、半关闭、
 `Content-Length` 与实际不符）靠 **Kali 做中间人/服务端**、宿主侧配合测出来，
 记录在 `net_faults-report-*.md`。
 
@@ -73,12 +73,18 @@ cargo 下一轮往里写 `dep-graph.part.bin` 时被拒 ⇒ `exit 101` + `error:
 理由是知识会忘 —— 不沉淀的话，下次改了分片逻辑还得重新起一次 VM 才知道坏没坏。
 **判据**：`net_faults-report-*.md` 里每一条故障，都能在测试代码里指到对应的测试函数。
 
-**`dev-dependencies` 目前是空的**，所以「固化」这一环全靠手写 `#[test]`。
-两个候选（按优先级，装哪个都不改现有测试）：
+**参数化与属性测试已落地**（2026-11-22，#3）：`dev-dependencies` = `rstest 0.23` + `proptest 1`。
 
-- **`rstest`** —— `split_for` 的三个 case 可合并成一个参数化测试，以后加边界只加一行
-- **`proptest`** —— `split_for` 的不变量（`concurrency` 恒在 `[1, 16]` 且不超过请求数）
-  适合随机输入验证；手写的边界用例想不到 `usize::MAX` 附近那种输入
+| 层 | 在哪 | 管什么 |
+|---|---|---|
+| 手写 `#[test]` | `src/**` 的 `mod tests` | 具体行为与错误分支（"这个输入必须得到这个结果"） |
+| 参数化（rstest） | `tests/params_*.rs` | 同一断言的多组输入；**加边界只加一行 `#[case]`** |
+| 属性（proptest） | `tests/props_*.rs` | **不变量**（"怎样都不该发生"），反例由生成器找并自动缩小 |
+
+**写属性测试的三条纪律**（每条都是踩过才写的）：
+- **不写死期望值** —— 片大小公式这类还在动的东西，写死数值等于每次微调都要改测试。
+- **不引用实现里的常量** —— 拿实现自己的 `PAGE` 验证实现自己的不变量是循环论证；契约值在测试文件头**独立声明**。
+- **关掉 `failure_persistence`** —— 默认失败会往仓库根写 `proptest-regressions/`，等于悄悄改了写范围。
 
 **提交门**（本机状态，新克隆/换机器要装一次）：
 
@@ -114,7 +120,7 @@ src/
 
 ---
 
-## 五、五个必须知道的坑（全部有实测记录）
+## 五、六个必须知道的坑（全部有实测记录）
 
 | 坑 | 判据 / 症状 |
 |---|---|
@@ -123,6 +129,7 @@ src/
 | **一个文件失败不该中断整批** | 批量场景一律用 `download::batch_opts()`（`continue_on_error = true` + 末尾汇总）|
 | **`SourcePool` 不是"主源挂了才换"** | 它按 EWMA 实测吞吐**一开始就分配**。改选源逻辑前先读 `source.rs` 的注释 |
 | **只有 `.part` 没有 `.part.state` 时必须从头下** | 稀疏文件的空洞读出来是 0，**宁可重下不拼坏文件** |
+| **续传判据必须用同一个 `piece_conns`** | 片大小是 `size / conns` 的函数：`PieceState::load` 曾固定按 conns=4 重建判据，于是 `--piece-conns 8` 的续传永远判过期、**静默从头重下**（不报错）。现在走 `load_with_conns(part, size, opts.piece_conns)`（2026-11-22 修，#5） |
 
 ---
 
