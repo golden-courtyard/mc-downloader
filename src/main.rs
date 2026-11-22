@@ -60,6 +60,10 @@ struct Args {
     #[arg(long = "if-range", global = true)]
     if_range: bool,
 
+    /// 没有 SHA1 的文件直接拒绝下载（默认关）
+    #[arg(long = "require-sha1", global = true)]
+    require_sha1: bool,
+
     /// 子命令（`--print-config` 时可以不写）
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -171,6 +175,7 @@ async fn main() -> Result<()> {
     let mut merged = settings::merge(&[("cli", &cli_layer), ("config", &loaded.settings)], &dflt);
     // `--if-range` 不进配置文件：它是"这次要不要冒险"的选择，不是机器默认值
     merged.opts.if_range = args.if_range;
+    merged.opts.require_sha1 = args.require_sha1;
     if args.print_config {
         let src = match &loaded.path {
             Some(p) => p.display().to_string(),

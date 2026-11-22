@@ -67,6 +67,11 @@ pub struct DownloadOpts {
     /// 远端若在中途换掉，服务器会回 200（整份）⇒ 我们按既有逻辑降级成单流重下，
     /// 而不是把两代内容拼成一个坏文件。**默认关**：多镜像 ETag 不一致会误判死（见 #7 的讨论）。
     pub if_range: bool,
+    /// 要求每个文件都必须有 SHA1（默认关）。
+    ///
+    /// 打开后，"清单里没给校验和"就**拒绝下载** —— 用在你不信任清单本身、
+    /// 或想让"完整性有保证"成为硬前提的场合。`fetch` 默认没有 sha1，所以它一定会被拒。
+    pub require_sha1: bool,
 }
 
 impl Default for DownloadOpts {
@@ -82,6 +87,7 @@ impl Default for DownloadOpts {
             max_speed: None,
             motw: true,
             if_range: false,
+            require_sha1: false,
         }
     }
 }
@@ -198,6 +204,28 @@ pub fn header_content_length(resp: &reqwest::Response) -> Option<u64> {
         .filter(|n| *n > 0)
 }
 
+/// 服务器未经请求就压缩了响应 ⇒ 必须**拒绝**，因为本 build 不解压。
+///
+/// 我们从不发 `Accept-Encoding`（reqwest 的 gzip/brotli/deflate feature 全没开），
+/// 所以正常情况下收到的就是原始字节。但有的 CDN/反代会把 `Content-Encoding: br/gzip` 硬塞过来
+/// —— 那时 body 是**压缩后的字节**，直接写盘就得到一个"大小对、内容全错"的文件；
+/// 更糟的是：`fetch` 没有 sha1 时，**没有任何东西会发现它坏了**（#10 的第 2 项）。
+///
+/// 所以宁可当场报错。`identity` 或没有这个头 = 正常。
+fn reject_unrequested_encoding(resp: &reqwest::Response) -> Result<()> {
+    let Some(v) = resp.headers().get(reqwest::header::CONTENT_ENCODING) else {
+        return Ok(());
+    };
+    let enc = v.to_str().unwrap_or("?").trim().to_ascii_lowercase();
+    if enc.is_empty() || enc == "identity" {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "服务器未经请求就压缩了响应（Content-Encoding: {enc}），而本 build 不解压 —— \
+         直接写盘会得到内容错误的文件。\n\
+         \x20 处理办法：换一个不压缩的源，或让它对 Range 请求返回未压缩的字节。"
+    );
+}
 fn part_path(dst: &Path) -> PathBuf {
     let ext = dst
         .extension()
@@ -324,6 +352,15 @@ async fn one(
     let dst = crate::pathsafe::under_root(root, Path::new(&job.path))
         .with_context(|| format!("目标路径不安全，拒绝落盘: {}", job.path))?;
 
+    // `--require-sha1`：没有校验和就不下（默认关 —— 大部分 fetch 场景本来就没有 sha1）
+    if opts.require_sha1 && job.sha1.is_none() {
+        anyhow::bail!(
+            "--require-sha1：{} 没有校验和，按你的要求拒绝下载\n\
+             \x20 去掉 --require-sha1 即可继续（但那意味着完整性没有保证）",
+            job.path
+        );
+    }
+
     // 已存在且 sha1 匹配 => 跳过（断点续传）
     if dst.exists() {
         match &job.sha1 {
@@ -360,6 +397,7 @@ async fn one_stream(
     pg: &Arc<Progress>,
 ) -> Result<()> {
     let resp = client.get(&job.url).send().await?.error_for_status()?;
+    reject_unrequested_encoding(&resp)?;
 
     let tmp = part_path(dst);
     let mut file = tokio::fs::File::create(&tmp)
@@ -1073,6 +1111,8 @@ async fn fetch_piece(pj: &PieceJob, ctx: &PieceCtx<'_>, tried: &mut Vec<usize>) 
     }
     let resp = req.send().await?;
 
+    // #10 第 2 项：未经请求的压缩 ⇒ 拒绝（否则写出内容错误的文件，而没 sha1 时没人能发现）
+    reject_unrequested_encoding(&resp)?;
     if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
         let status = resp.status();
         if status == reqwest::StatusCode::OK {

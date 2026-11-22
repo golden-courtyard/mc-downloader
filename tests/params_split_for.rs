@@ -94,6 +94,7 @@ fn split_for_keeps_every_other_field() {
         max_speed: Some(1024 * 1024),
         motw: false,
         if_range: true,
+        require_sha1: true,
     };
     let s = src.split_for(3);
 
@@ -107,6 +108,10 @@ fn split_for_keeps_every_other_field() {
     assert_eq!(s.max_speed, src.max_speed);
     assert_eq!(s.motw, src.motw, "分任务并发时 MotW 开关也要原样带过去");
     assert_eq!(s.if_range, src.if_range, "If-Range 同样是原样带过去的字段");
+    assert_eq!(
+        s.require_sha1, src.require_sha1,
+        "require_sha1 也要原样带过去"
+    );
 }
 
 /// 单调性：任务越多，单任务分到的并发只会更少（不会反而变多）。
