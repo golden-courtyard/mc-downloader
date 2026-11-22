@@ -1,5 +1,10 @@
 # mc-downloader 下载脚本示例
 #
+# 格式版本：省略按 1 处理；写别的数会明确报「太新/太旧」。
+schema = 1
+# 某个任务失败后是否继续（**脚本级**开关；末尾汇总并以非零退出）。
+continue_on_error = false
+#
 # 用法：mc-downloader run mc-downloader.example.toml
 #
 # 结构：
@@ -46,6 +51,10 @@ adaptive = false
 # ---------- 任务 1：下载某个 MC 原版 ----------
 [[task]]
 kind = "mc"
+# 逐任务覆盖（可选）：retries / timeout_secs / max_speed，只影响这一个任务
+# retries = 1
+# timeout_secs = 120
+# max_speed = "20M"
 version = "26.3"
 dir = "D:/Games/.minecraft"
 

@@ -10,20 +10,27 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use mc_downloader::config::Tune;
 use mc_downloader::download::DownloadOpts;
 use mc_downloader::settings::{SourceSettings, Sources};
 use mc_downloader::version::SizeHint;
 use mc_downloader::{config, download, fabric, forge, neoforge, pack, url_list, vanilla, version};
 
 /// 执行脚本里的全部任务。
+///
+/// `continue_on_error` 是**脚本级**开关（`continue_on_error = true`）：某个任务失败时是否继续。
+/// 为 true 时末尾汇总失败任务并以非零退出 —— 绝不"跳过失败还报成功"。
 pub async fn execute(
     tasks: &[config::TaskSpec],
     parallel: bool,
+    continue_on_error: bool,
     opts: &DownloadOpts,
     src_cfg: &SourceSettings,
     cfg_path: Option<&std::path::Path>,
 ) -> Result<()> {
     let total = tasks.len();
+    // (第几个任务, 错误)；只在 continue_on_error 时收集
+    let mut failed: Vec<(usize, String)> = Vec::new();
 
     if parallel {
         // 并行时把总并发均分，避免 N × concurrency 条连接炸掉
@@ -34,13 +41,42 @@ pub async fn execute(
         );
         let futs: Vec<_> = tasks
             .iter()
-            .map(|task| run_one_task(task, &per, src_cfg, cfg_path))
+            .enumerate()
+            .map(|(i, task)| {
+                let per = per.clone();
+                async move { (i + 1, run_one_task(task, &per, src_cfg, cfg_path).await) }
+            })
             .collect();
-        futures::future::try_join_all(futs).await?;
-    } else {
-        for task in tasks.iter() {
-            run_one_task(task, opts, src_cfg, cfg_path).await?;
+        for (idx, r) in futures::future::join_all(futs).await {
+            if let Err(e) = r {
+                if !continue_on_error {
+                    return Err(e);
+                }
+                eprintln!("[!] 第 {idx} 个任务失败（continue_on_error 已跳过）: {e:#}");
+                failed.push((idx, format!("{e:#}")));
+            }
         }
+    } else {
+        for (i, task) in tasks.iter().enumerate() {
+            if let Err(e) = run_one_task(task, opts, src_cfg, cfg_path).await {
+                if !continue_on_error {
+                    return Err(e);
+                }
+                eprintln!(
+                    "[!] 第 {} 个任务失败（continue_on_error 已跳过）: {e:#}",
+                    i + 1
+                );
+                failed.push((i + 1, format!("{e:#}")));
+            }
+        }
+    }
+    if !failed.is_empty() {
+        anyhow::bail!(
+            "{}/{} 个任务失败（第 {} 个起；首个错误见上面）",
+            failed.len(),
+            total,
+            failed[0].0
+        );
     }
     println!("\n[+] 脚本执行完成：{total} 个任务");
     Ok(())
@@ -56,11 +92,15 @@ async fn run_one_task(
     // **按需解析**：generic 任务（url / urls_file）不需要任何源，
     // 没有配置的机器上它们必须照常能跑（issue #15 的验收之一）
     let need_src = || Sources::resolve(src_cfg, cfg_path);
+    // 逐任务覆盖：只影响这一个任务（优先级 CLI > 逐任务 > 脚本全局 > 用户配置 > 默认）
+    let tuned = apply_tune(opts, &task.tune())?;
+    let opts = &tuned;
     match task {
         config::TaskSpec::Mc {
             version,
             dir,
             loader,
+            ..
         } => {
             println!("[mc] {version} -> {dir}");
             let src = need_src()?;
@@ -113,6 +153,7 @@ async fn run_one_task(
             name,
             size,
             mirrors,
+            ..
         } => {
             let root = Path::new(dir);
             // 配置层已校验过「url / urls_file 二选一」，这里按存在哪个走
@@ -174,11 +215,28 @@ async fn run_one_task(
                 download::run(&[job], root, opts).await?;
             }
         }
-        config::TaskSpec::Pack { file, dir } => {
+        config::TaskSpec::Pack { file, dir, .. } => {
             let src = need_src()?;
             println!("[pack] {file} -> {dir}");
             pack::install(Path::new(file), Path::new(dir), opts, &src).await?;
         }
     }
     Ok(())
+}
+
+/// 把逐任务覆盖叠到全局参数上。`max_speed` 在启动期解析，非法写法直接报错（不静默当"不限速"）。
+fn apply_tune(base: &DownloadOpts, t: &Tune<'_>) -> Result<DownloadOpts> {
+    let mut o = base.clone();
+    if let Some(r) = t.retries {
+        o.retries = r;
+    }
+    if let Some(s) = t.timeout_secs {
+        o.timeout_secs = s;
+    }
+    if let Some(s) = t.max_speed {
+        o.max_speed = Some(mc_downloader::progress::parse_speed(s).ok_or_else(|| {
+            anyhow::anyhow!("任务里的 max_speed 解析失败：`{s}`（例：5M / 500K / 1048576）")
+        })?);
+    }
+    Ok(o)
 }

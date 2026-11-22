@@ -300,6 +300,10 @@ GitHub、境外 CDN 先用 8；不确定就开 `--adaptive true` 让它自己调
 ## 六、脚本格式参考
 
 ```toml
+schema = 1            # 可选。省略按 1 处理；写别的数会明确报「太新/太旧」，而不是让字段静默失效
+
+continue_on_error = false   # 可选，**脚本级**：某个任务失败时是否继续跑后面的（末尾汇总并以非零退出）
+
 [network]
 proxy = "http://127.0.0.1:7897"   # 空字符串 "" = 显式直连
 retry = 3
@@ -311,6 +315,33 @@ piece_conns = 4
 adaptive = false
 max_speed = "5M"
 ```
+
+### 6.1 逐任务覆盖（`retries` / `timeout_secs` / `max_speed`）
+
+三个键可以写在**任意** `[[task]]` 上，只影响那一个任务：
+
+```toml
+[[task]]
+kind = "generic"
+url = "https://<你的源>/big.iso"
+dir = "D:/Downloads"
+retries = 1          # 这一个大文件不值得重试三次
+timeout_secs = 120   # 慢连接上单次读 30s 不够
+max_speed = "20M"    # 别的任务不限速，这一个限到 20M
+```
+
+优先级：**CLI > 逐任务 > 脚本全局（`[network]`/`[download]`）> 用户配置 > 内置默认**。
+
+取值在**启动期**校验：`retries = 0`、`timeout_secs` 越界、`max_speed` 写错，都会在开始下载之前报错
+——不会等到跑到一半才失败。
+
+### 6.2 为什么 `continue_on_error` 在脚本级而不是任务级
+
+"失败后要不要继续"是**这一次运行**的属性，不是某个任务的属性。写在任务上会变成
+"第 2 个任务失败时，第 3 个怎么办取决于第 2 个自己的配置" —— 那是逻辑陷阱，不是灵活性。
+
+行为：为 `true` 时逐条打印「第 N 个任务失败（已跳过）」并继续，**末尾汇总失败数并以非零退出**；
+绝不"跳过失败还报成功"。
 
 ```toml
 [[task]]

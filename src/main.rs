@@ -243,6 +243,7 @@ async fn main() -> Result<()> {
             commands::run::execute(
                 &cfg.tasks,
                 parallel,
+                cfg.continue_on_error.unwrap_or(false),
                 &opts,
                 &ctx.source,
                 ctx.config_path.as_deref(),
