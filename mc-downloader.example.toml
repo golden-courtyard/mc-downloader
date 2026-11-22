@@ -1,34 +1,17 @@
 # mc-downloader 下载脚本示例
 #
-# 格式版本：省略按 1 处理；写别的数会明确报「太新/太旧」。
-schema = 1
-# 某个任务失败后是否继续（**脚本级**开关；末尾汇总并以非零退出）。
-continue_on_error = false
-#
 # 用法：mc-downloader run mc-downloader.example.toml
-#
-# 结构：
-#   # ---------- 下载源（**必填**，本工具不内置任何源）----------
-# 2026-10-20 PCL2 移除了 MC 下载功能（「为遵守相关法律法规」）——「第三方工具内置下载功能」
-# 这件事处在合规灰区。所以本工具把「知道去哪下」交给用户：下面五项自己填。
-# 缺任何一项，依赖源的子命令（vanilla / run / pack）会**直接报错并告诉你缺哪个**；
-# 而 fetch <url> 不需要源 —— 你给地址、它只做传输。
-[source]
-metadata    = ""   # 版本清单的完整地址（指向 version_manifest_v2.json 那一层）
-assets      = ""   # assets 基址（不带结尾 /）
-fabric      = ""   # Fabric loader 元数据基址
-forge_meta  = ""   # Forge promotions_slim.json 所在基址
-forge_maven = ""   # Forge maven 基址（installer 与 libraries）
-neoforge    = ""   # NeoForge maven 基址（含 /releases）
-[network]   全局网络
-#   [download]  全局并发
-#   [[task]]    任务清单，按声明顺序串行执行
-#
-# 未知字段会直接报错（防止拼错 key 却静默不生效）
+# 结构： [source] 下载源（**必填**） · [network] 代理与重试 · [download] 并发与分片 · [[task]] 任务清单
+# 未知字段会直接报错（防止拼错 key 却静默不生效）。
+
+# 格式版本：省略按 1 处理；写别的数会明确报「太新 / 太旧」。
+schema = 1
+# 某个任务失败后是否继续（**脚本级**开关；末尾汇总失败数并以非零退出）。
+continue_on_error = false
 
 # ---------- 下载源（**必填**，本工具不内置任何源）----------
 # 2026-10-20 PCL2 移除了 MC 下载功能（「为遵守相关法律法规」）——「第三方工具内置下载功能」
-# 这件事处在合规灰区。所以本工具把「知道去哪下」交给用户：下面五项自己填。
+# 处在合规灰区。所以本工具把「知道去哪下」交给用户：下面六个键自己填。
 # 缺任何一项，依赖源的子命令（vanilla / run / pack）会**直接报错并告诉你缺哪个**；
 # 而 fetch <url> 不需要源 —— 你给地址、它只做传输。
 [source]
@@ -38,6 +21,7 @@ fabric      = ""   # Fabric loader 元数据基址
 forge_meta  = ""   # Forge promotions_slim.json 所在基址
 forge_maven = ""   # Forge maven 基址（installer 与 libraries）
 neoforge    = ""   # NeoForge maven 基址（含 /releases）
+
 [network]
 # 空字符串 = 显式直连
 proxy = ""
@@ -55,14 +39,14 @@ kind = "mc"
 # retries = 1
 # timeout_secs = 120
 # max_speed = "20M"
-version = "26.3"
+version = "1.20.1"
 dir = "D:/Games/.minecraft"
 
 # ---------- 任务 2：装一个 Modrinth 整合包 ----------
 # [[task]]
 # kind = "pack"
-# file = "C:/Users/<you>/OneDrive/桌面/Fabulously.Optimized-v15.0.0-beta.2.mrpack"
-# dir = "D:/Games/mc-26.1.2"
+# file = "D:/Downloads/Fabulously.Optimized-v15.0.0.mrpack"
+# dir = "D:/Games/mc-fo"
 
 # ---------- 任务 3：下单个大文件（可带镜像）----------
 # [[task]]

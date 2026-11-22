@@ -359,7 +359,7 @@ C 臂 = 2（1 HEAD + 1 流）。`check_content_range` 只解析 `Content-Range` 
 
 ## 8c. E8 · 实时防护（火绒）对写路径的影响
 
-**为什么单独做这一条**：这台机器装了火绒 6.0.0.4（`HipsDaemon` 服务 Running），而它**不在 SecurityCenter2 里**
+**为什么单独做这一条**：这台机器装了火绒 6.0.0.1（`HipsDaemon` 服务 Running），而它**不在 SecurityCenter2 里**
 （开着防护时那里只有 Windows Defender）——「查注册表判断杀软」在本机直接失效。
 实时防护是坐在 `CreateFile/Close` 上的第三方代码，它的代价不会出现在我们自己的计数器里，只能落在墙钟与磁盘延迟上。
 

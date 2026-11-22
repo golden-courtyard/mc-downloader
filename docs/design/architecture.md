@@ -55,7 +55,7 @@ Job{url,path,sha1,size,mirrors}
 
 三条不变量（破了就是坏文件，不是慢）：
 
-1. **片起点与片长都是 4 KiB 的倍数** —— 与机械盘/页缓存对齐有关，见 `architecture/piece-page-alignment` note；
+1. **片起点与片长都是 4 KiB 的倍数** —— 与机械盘/页缓存对齐有关，见 `../../../../.agents/notes/implemented/architecture/2026-11-22-piece-page-alignment.md`；
 2. **续传判据必须用同一个 `--piece-conns`** —— 片大小是 `conns` 的函数，判据错就静默从头重下；
 3. **`Content-Range` 的起点、终点、总长三项都要对** —— 只有总长对比是抓不到起点错位的。
 

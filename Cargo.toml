@@ -2,7 +2,7 @@
 name = "mc-downloader"
 version = "0.6.0"
 edition = "2024"
-description = "从 Mojang 官方 CDN 下载 Minecraft，或安装 Modrinth 格式整合包"
+description = "把 Minecraft 相关文件放到正确位置（下载源由你在 [source] 配置）"
 license = "MIT"
 readme = "README.md"
 # 最低支持版本：cargo 会在这条不满足时直接拒绝编译。

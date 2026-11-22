@@ -1,6 +1,6 @@
 //! 分片表：固定大小分片 + 位图状态。
 //!
-//! 设计参照 DeepInfer 的 block table（`csrc/engine/block_manager.hpp`）
+//! 设计参照 PagedAttention 的 block table（Kwon et al. 2023；vLLM 开源实现）
 //! 与 aria2 的 `min-split-size`：**小文件不分片**。
 
 use std::io;

@@ -17,9 +17,9 @@ Status: implemented
 
 | 位置 | 内容 | 处置 |
 |---|---|---|
-| `.codeartsdoer/specs/net_faults/*.md` | 内网 VM 地址 `172.19.x.x`、`ssh -i ~/.ssh/<key> kali@…` | 取消跟踪 + 进 `.gitignore`（工具工件不该入库） |
+| `.codeartsdoer/specs/net_faults/*.md` | 内网 VM 地址 `172.19.x.x`（本机实测的具体值已抹去）、`ssh -i ~/.ssh/<key> kali@…` | 取消跟踪 + 进 `.gitignore`（工具工件不该入库） |
 | `tools/baseline_{main,run,run_parallel}.txt` | `C:/Users/<user>/AppData/Local/Temp/…` 绝对路径 + 真实源 URL | 删除（无任何文档引用） |
-| `README.md` 法律定位段 | 仍写着"下载来源：piston-meta… <你的源>…" | 改写为"全部由用户在 `[source]` 提供" |
+| `README.md` 法律定位段 | 仍写着"下载来源：…（旧的内置源列表）" | 改写为"全部由用户在 `[source]` 提供" |
 
 **判定为可接受、保留不动的**：
 

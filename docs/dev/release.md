@@ -13,7 +13,7 @@ cargo build --release --locked
 
 - [ ] 三条全绿（本地绿 **不等于** CI 绿，见第 4 步）
 - [ ] `mc-downloader --print-config` 能跑（它需要一个子命令以外的路径，别只在 `cargo test` 里验过）
-- [ ] `src/` 里零下载源地址：`grep -rnE 'piston-meta|launchermeta|bmclapi|download\.minecraft' src/` 无输出
+- [ ] `src/` 里零下载源地址：`grep -rnE 'piston-meta|launchermeta|bmclapi|download\.minecraft|meta\.fabricmc|files\.minecraftforge|maven\.minecraftforge|maven\.neoforged|libraries\.minecraft|resources\.download' src/` 无输出
 
 ## 2 文档与版本
 

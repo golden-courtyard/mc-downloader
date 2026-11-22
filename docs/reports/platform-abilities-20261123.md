@@ -142,7 +142,7 @@
 |---|---|---|
 | **现在做** | D 的 `Retry-After` + 429/503 归因 | 已有 `backoff_ms` 可复用；错误文案现在**是错的** |
 | **现在做** | B 的磁盘空间预检（+ C 的 `statvfs`） | 一次调用换一个可读错误，避免写一半 |
-| **本轮已实现（待提交）** | B 的 MotW | `src/motw.rs` 已在（未提交） |
+| **本轮已实现** | B 的 MotW | `src/motw.rs`（已入库） |
 | **以后做** | D 的 `If-Range`/`If-Match`（#7B） | 要与 `.part.state` 格式变更一起做 |
 | **以后做（有判据）** | C 的 `fallocate` | 先证明 Linux 侧 `WA > 1.2`，否则不做 |
 | **不做** | 火绒当 gate、读火绒日志、`HrSafe` | A.1–A.4：做不到，或来源不可信 |
@@ -173,7 +173,7 @@ stat -f -c '%T %S' /
 
 - 火绒论坛引用：A.1/A.2/A.3 的四个帖子链接见正文；本机 `-s` **本轮未实跑**（会拉起 UI 并开始扫描），
   所以"会弹 UI、无结果输出"这两点来自官方回复，不是本轮实测。
-- 代码行号对应 2026-11-22 的工作树（`git status` 里 `src/motw.rs`/`src/settings.rs` 尚未提交）；`src/` 正在改，行号会漂 —— 按函数名/错误串找（`mark_if_enabled`、`backoff_ms`、「服务器不支持 Range」「远端文件大小变了」）。
+- 代码行号对应 2026-11-22 的工作树（`git status` 里 `src/motw.rs`/`src/settings.rs` 当时尚未提交）；`src/` 正在改，行号会漂 —— 按函数名/错误串找（`mark_if_enabled`、`backoff_ms`、「服务器不支持 Range」「远端文件大小变了」）。
 
 ## 限制
 

@@ -1,6 +1,6 @@
 //! 全局分片队列：动态插入，消费者不退出。
 //!
-//! 设计参照 DeepInfer 的 continuous batching —— **不等当前批完成，新任务随时插入**。
+//! 设计参照 continuous batching（Orca, Yu et al. 2022；vLLM） —— **不等当前批完成，新任务随时插入**。
 //! 队列空时 worker 挂起在 `Notify` 上，`push` 唤醒一个；`close` 唤醒全部并退出。
 
 use std::collections::VecDeque;
