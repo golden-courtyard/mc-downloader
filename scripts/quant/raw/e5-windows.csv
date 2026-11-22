@@ -1,0 +1,5 @@
+"arm","round","conns","retry","reqs","secs","exit","tail"
+"retry0","1","1","0","1","0.87","1","    1: HTTP status server error (500 Internal Server Error) for url (http://127.0.0.1:8898/f.bin)"
+"retry0","2","1","0","1","0.12","1","    1: HTTP status server error (500 Internal Server Error) for url (http://127.0.0.1:8898/f.bin)"
+"retry0","3","1","0","1","0.12","1","    1: HTTP status server error (500 Internal Server Error) for url (http://127.0.0.1:8898/f.bin)"
+"retry3-cluster","1","4","3","16","11.53","1","    0: e5b.bin 重试 3 次仍失败"

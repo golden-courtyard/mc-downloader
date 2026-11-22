@@ -1,0 +1,10 @@
+arm,round,conns,bytes,secs,mbps,exit,piece_line,strace
+legacy,1,7,100663296,0.534,179.78,0,"",e3-align-legacy-r1.strace
+legacy,2,7,100663296,0.496,193.55,0,"",e3-align-legacy-r2.strace
+legacy,3,7,100663296,0.758,126.65,0,"",e3-align-legacy-r3.strace
+before-mid,1,7,100663296,0.483,198.76,0,"8 片 · 实际并发 7（配置 7；片大小 14380470 字节）",e3-align-before-mid-r1.strace
+before-mid,2,7,100663296,0.508,188.98,0,"8 片 · 实际并发 7（配置 7；片大小 14380470 字节）",e3-align-before-mid-r2.strace
+before-mid,3,7,100663296,0.546,175.82,0,"8 片 · 实际并发 7（配置 7；片大小 14380470 字节）",e3-align-before-mid-r3.strace
+after,1,7,100663296,0.581,165.23,0,"8 片 · 实际并发 7（配置 7；片大小 14376960 字节）",e3-align-after-r1.strace
+after,2,7,100663296,0.580,165.52,0,"8 片 · 实际并发 7（配置 7；片大小 14376960 字节）",e3-align-after-r2.strace
+after,3,7,100663296,0.526,182.51,0,"8 片 · 实际并发 7（配置 7；片大小 14376960 字节）",e3-align-after-r3.strace
