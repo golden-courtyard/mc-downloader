@@ -29,7 +29,7 @@ Status: proposed — 当前 `piece.rs` 的 `with_conns` 只在**下载开始前*
 
 `PieceScheduler` 的设计注释写着：
 
-> 设计参照 DeepInfer 的 continuous batching —— **不等当前批完成，新任务随时插入**
+> 设计参照 continuous batching（Orca, Yu et al. 2022；vLLM） —— **不等当前批完成，新任务随时插入**
 
 `push` / `push_many` 本来就是为"运行中插入"准备的 —— **地基有，只是切片策略还没用上它。**
 

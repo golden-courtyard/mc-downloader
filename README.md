@@ -93,7 +93,7 @@ mc-downloader pack "xxx.mrpack" -d "D:/Games/.minecraft"
 | 改代码（构建、测试、提交门） | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | 改代码前不能踩什么 | [AGENTS.md](AGENTS.md) |
 | 为什么是现在这样 | [.agents/notes/](.agents/notes/) |
-| 架构与路线 | [docs/design/DESIGN.md](docs/design/DESIGN.md) / [docs/design/ROADMAP.md](docs/design/ROADMAP.md) |
+| 架构与关键取舍 | [docs/design/architecture.md](docs/design/architecture.md) |
 | 每个版本改了什么 | [CHANGELOG.md](CHANGELOG.md) |
 | 全部文档的索引 | [docs/README.md](docs/README.md) |
 ## 是什么

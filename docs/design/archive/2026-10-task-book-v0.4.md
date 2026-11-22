@@ -34,7 +34,7 @@
 
 ## 二、借鉴了 DeepSeek 的哪些机制
 
-| DeepInfer / DeepSpec 机制 | 迁移到下载器 | 落点 |
+| 推理引擎侧的机制（公开论文与开源实现） | 迁移到下载器 | 落点 |
 |---|---|---|
 | **PagedAttention 的「固定大小块」** | **固定大小分片 + 按片管理** | `piece.rs` |
 | **Continuous batching** | **全局分片队列，新任务随时插入** | `scheduler.rs` |
@@ -48,7 +48,7 @@
 > 注意：**2026-10-21 核对源码后修正（原文写错了）**
 >
 > 原文这条写的是「PagedAttention + **BlockManager** → 固定大小分片 + **位图状态表**」。
-> 实际读 `DeepInfer/csrc/engine/block_manager.hpp`：
+> 实际读 vLLM 的 block manager（公开源码）：
 > `struct Blocks` 是**双向链表 free list**（`prev`/`next`/`_head`/`_tail`）+ **`ref_count`**
 > （支持跨 sequence 共享同一块），**不是位图**。
 >
@@ -95,8 +95,8 @@ struct PieceTable {          // 现状：src/piece.rs
 **这条是本设计的核心**：**小文件不分片**——不是偷懒，是 aria2 的默认策略（`min-split-size=20M`），也是 MC 场景的实际情况。
 
 切片策略的两次演进与取舍见
-[片大小耦合](../../.agents/notes/implemented/architecture/2026-10-27-piece-size-coupled-to-fanout.md) 与
-[页对齐](../../.agents/notes/implemented/architecture/2026-11-22-piece-page-alignment.md)；
+[片大小耦合](../../../.agents/notes/implemented/architecture/2026-10-27-piece-size-coupled-to-fanout.md) 与
+[页对齐](../../../.agents/notes/implemented/architecture/2026-11-22-piece-page-alignment.md)；
 **并发数是不是瓶颈**的实测见 `docs/reports/quant-report-20261122.md` 的 E1。
 
 ### 3.2 落点
@@ -202,7 +202,7 @@ SHA256     本地 c3514bf0…274b == 官方 SHA256SUMS 同值
 | 参考 | 学什么 | 位置 |
 |---|---|---|
 | **aria2** | `min-split-size` / `--max-tries` / 分片调度 | `importantClone/aria2` |
-| **DeepInfer** | block table / 动态队列 / 负载均衡 | `DEEPSEEKCLONE/DeepInfer` |
+| **推理引擎** | block table / 动态队列 / 负载均衡 | （内部实现，不入库、不链接） |
 | **mc-downloader v0.3** | 流式写盘 / SHA1 边写边算 / `.part` + rename | 本仓 |
 
 ---

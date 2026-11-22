@@ -11,8 +11,8 @@
 | 改代码（构建、测试、提交门） | [CONTRIBUTING.md](../CONTRIBUTING.md) |
 | 改代码前不能踩什么（铁律、坑、判据） | [AGENTS.md](../AGENTS.md) |
 | 为什么是现在这样（放弃了什么） | [.agents/notes/](../.agents/notes/) |
-| 架构与取舍的全局视图 | [design/DESIGN.md](design/DESIGN.md) |
-| 接下来打算做什么 | [design/ROADMAP.md](design/ROADMAP.md) |
+| 架构与取舍的全局视图 | [design/architecture.md](design/architecture.md) |
+| 接下来打算做什么 | [design/archive/](design/archive/) |
 | 某个版本改了什么 | [CHANGELOG.md](../CHANGELOG.md) |
 | 要发一个版本 | [dev/release.md](dev/release.md) |
 
@@ -22,7 +22,7 @@
 docs/
   user/        给使用者的：怎么用、参数含义、排错
   dev/         给维护者的：发布流程
-  design/      架构与路线（DESIGN / ROADMAP）
+  design/      架构（architecture.md）与已完稿的任务书归档（archive/）
   reports/     实验与审查产物（定量报告、攻击面、平台能力、代码审查）
 ```
 
