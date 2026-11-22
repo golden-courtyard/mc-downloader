@@ -83,5 +83,22 @@ pub fn under_root(root: &Path, rel: &Path) -> Result<PathBuf>;  // 落盘前的�
 或 Windows 的重解析点检查，两边语义不同、工作量不小；当前威胁模型（下载别人给的包）里，
 这个窗口需要攻击者已经在机器上有并发写权限，收益不匹配。留作已知项，不假装没有。
 
+**红队复核（2026-11-22，28 个用例）又挖出两处，已修**：
+
+1. **`fetch --force` 是"先删、再拒"**：`fetch.rs` 在 `download::run` 之前就 `dir.join(name)` → `exists()` → `remove_file`，
+   而 `pathsafe::under_root` 要到 `download::one` 才跑。于是 `--force -n "..\victim.txt"` 会**删掉 `--dir` 之外的文件**
+   （复现两次，`c\victim.txt` 消失了）。`--name` 是用户输入、不是远端，所以不算远程穿越，
+   但它违反"拒绝整条任务"的承诺。修法：把校验提到碰文件系统之前（`resolve_dst`），并给 `commands` 补了单测。
+2. **`urls_file` 一行坏就整批拒**：`url_list::parse` 在第一条推不出名字时直接 `bail`，而 `batch_opts` 的
+   "一个失败不拖累其余"只在下载阶段生效 ⇒ 混排列表里合法的那条一个字节都没下。修法：坏行（推不出名字 / 重名）
+   跳过并计数，只有"一条有效都没有"才报错。
+
+两处都是同一类错误：**把"检查"放在了"产生副作用"之后**。判据写在这里供以后复用：
+凡是"先动文件系统、再校验输入"的代码路径，一律视为缺陷。
+
+**仍未覆盖（红队指出的验证缺口）**：`pack` 的 overrides 闸**没有离线端到端路径** ——
+`extract_overrides` 之前要先下 vanilla（`pack/mod.rs:43`），所以 `overrides//abs`、`overrides/C:/x`
+只能靠单测（2026-11-22 补了两条）。要端到端验，需要 pack 的离线模式或可注入的下载器。
+
 **顺带**：`AGENTS.md §五` 加了一条坑；`.agents/notes/implemented/architecture/2026-10-28-content-range-check.md`
 里"落盘前不校验路径"的隐含假设就此失效 —— 那条 note 讲的是 `Content-Range`，路径安全由本条承担。

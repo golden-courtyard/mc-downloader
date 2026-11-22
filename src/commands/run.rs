@@ -108,7 +108,7 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
                     .with_context(|| format!("解析列表文件失败: {list_path}"))?;
                 if parsed.skipped > 0 {
                     println!(
-                        "[!] 跳过了 {} 行非 URL 内容（aria2 的 dir=/out= 之类选项行）",
+                        "[!] 跳过 {} 行：非 URL 内容（aria2 的 dir=/out= 之类）/ 推不出文件名 / 重名。逐行原因见上面的警告",
                         parsed.skipped
                     );
                 }

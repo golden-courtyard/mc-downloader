@@ -194,7 +194,13 @@ pub async fn run(jobs: &[Job], root: &Path, opts: &DownloadOpts) -> Result<()> {
         let root = root.to_path_buf();
         let pg = pg.clone();
         let opts = opts.clone();
-        async move { one_with_retry(&client, &job, &root, &opts, &pg).await }
+        async move {
+            // 路径非法是**确定性**失败：重试三次只会把 1+2+4 秒白等一遍，还会把
+            // 「拒绝整条任务」做成「先拒三次再拒」。所以在进重试环之前先判一次。
+            crate::pathsafe::under_root(&root, Path::new(&job.path))
+                .with_context(|| format!("目标路径不安全，拒绝落盘: {}（不重试）", job.path))?;
+            one_with_retry(&client, &job, &root, &opts, &pg).await
+        }
     }))
     .buffer_unordered(opts.concurrency.max(1));
 

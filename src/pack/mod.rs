@@ -397,4 +397,41 @@ mod tests {
         let _ = std::fs::remove_dir(inst.join("config"));
         let _ = std::fs::remove_dir(&inst);
     }
+
+    /// zip 条目的另两种越界形态：剥掉前缀后是**绝对路径**（`overrides//abs`）与**带盘符**（`C:/x`）。
+    ///
+    /// 红队 2026-11-22 指出：此前只有 `overrides/../../escaped.txt` 一条单测，这两种没有任何覆盖。
+    #[test]
+    fn hostile_override_absolute_and_drive_are_skipped() {
+        let tag = format!("ov-abs-{}", std::process::id());
+        let p = make_zip(
+            &tag,
+            &[
+                (
+                    mrpack::INDEX_NAME,
+                    r#"{"dependencies":{"minecraft":"1.21.1"}}"#,
+                ),
+                ("overrides//abs.txt", "pwned"),
+                ("overrides/C:/drive.txt", "pwned"),
+                ("overrides/ok/keep.toml", "x=1"),
+            ],
+        );
+        let mut z = zip::ZipArchive::new(File::open(&p).unwrap()).unwrap();
+
+        let inst = std::env::temp_dir().join(format!("mcd-inst-abs-{}", std::process::id()));
+        std::fs::create_dir_all(&inst).unwrap();
+        let (copied, skipped) =
+            extract_overrides(&mut z, &["overrides/".to_string()], &inst).unwrap();
+
+        assert_eq!(copied, 1, "只有 ok/keep.toml 该落盘");
+        assert_eq!(skipped, 2, "绝对路径与盘符两条都要跳过并计数");
+        assert!(inst.join("ok").join("keep.toml").exists());
+        // 剥掉前缀后剩 `/abs.txt`：既不能落到盘根，也不能落到实例目录里叫 `abs.txt`
+        assert!(!inst.join("abs.txt").exists(), "绝对路径条目不许落盘");
+
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(inst.join("ok").join("keep.toml"));
+        let _ = std::fs::remove_dir(inst.join("ok"));
+        let _ = std::fs::remove_dir(&inst);
+    }
 }

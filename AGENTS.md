@@ -38,7 +38,7 @@
 ```bash
 cargo fmt --all                                     # ① 格式（pre-commit 门会拦）
 cargo clippy --all-targets --locked -- -D warnings   # ② lint（-D warnings = 警告即错）
-CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（lib 当前 153 条）
+CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（lib 当前 156 条）
 cargo build --release                               # ④ 产物：target/release/mc-downloader.exe
 ```
 
@@ -57,7 +57,7 @@ cargo 下一轮往里写 `dep-graph.part.bin` 时被拒 ⇒ `exit 101` + `error:
 
 ### 测试策略：两类，分工不同
 
-**现有 153 条 lib 单元测试 + 37 条集成测试（19 参数化 + 5 属性 + 8 HTTP 语义 + 5 Linux 语义），只覆盖「能想到的失败」。** 真实网络行为（丢包、RST、半关闭、
+**现有 156 条 lib 单元测试 + 37 条集成测试（19 参数化 + 5 属性 + 8 HTTP 语义 + 5 Linux 语义），只覆盖「能想到的失败」。** 真实网络行为（丢包、RST、半关闭、
 `Content-Length` 与实际不符）靠 **Kali 做中间人/服务端**、宿主侧配合测出来，
 记录在 `docs/reports/net_faults-report-*.md`。
 

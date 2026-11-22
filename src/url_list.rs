@@ -30,10 +30,11 @@ pub struct ParsedList {
 
 /// 解析列表文件内容。
 ///
-/// 报错条件（都是"不许猜"的情形）：
-/// - 推不出文件名（URL 以 `/` 结尾，或只有 host 没有 path）
-/// - **两个 URL 推出同一个文件名** —— 否则后者会被当成"已存在"跳过，静默丢一个
-/// - 一条有效 URL 都没有
+/// **坏行跳过、不连坐整批**（2026-11-22 起；此前是直接报错，一行坏 URL 会让其余合法的一条都不下）：
+///
+/// - 推不出文件名（URL 以 `/` 结尾，或只有 host 没有 path）⇒ 跳过并计数
+/// - **两个 URL 推出同一个文件名** ⇒ 保留第一条、跳过后一条（同目录会互相覆盖）
+/// - 一条有效 URL 都没有 ⇒ **这时才报错**（否则"成功但什么都没下"更难查）
 pub fn parse(content: &str) -> Result<ParsedList> {
     let mut entries: Vec<Entry> = Vec::new();
     let mut skipped = 0usize;
@@ -52,20 +53,26 @@ pub fn parse(content: &str) -> Result<ParsedList> {
             continue;
         }
 
+        // 推不出名字 ⇒ **跳过这一行**，不要连坐整批：`batch_opts` 的「一个失败不拖累其余」
+        // 是下载阶段的承诺，解析阶段也该一样（红队 2026-11-22 实测：一行坏 URL 会让合法那条
+        // 一个字节都没下）。
         let Some(file_name) = filename_from_url(line) else {
-            bail!(
-                "第 {lineno} 行推不出文件名：{line}\n\
-                 \x20 URL 要以文件名结尾（不能以 `/` 结尾，也不能只有主机名）。\n\
-                 \x20 需要自定义名字的话，请用单个 `url` + `name` 的写法"
+            eprintln!(
+                "[!] 第 {lineno} 行推不出文件名，已跳过：{line}\n\
+                 \x20 URL 要以文件名结尾（不能以 `/` 结尾，也不能只有主机名）"
             );
+            skipped += 1;
+            continue;
         };
 
         if let Some(prev) = seen.insert(file_name.clone(), lineno) {
-            bail!(
-                "第 {prev} 行和第 {lineno} 行推出同一个文件名 `{file_name}`。\n\
-                 \x20 同一个目录下会互相覆盖（后者被当成“已存在”跳过），\n\
-                 \x20 所以这里直接报错。请拆成两个任务，或用单个 `url` + `name` 分别指定"
+            // 同名会互相覆盖（后者被当成「已存在」跳过）⇒ 保留第一条、跳过后来者，并说清原因
+            eprintln!(
+                "[!] 第 {prev} 行和第 {lineno} 行推出同一个文件名 `{file_name}`，已跳过后一条\n\
+                 \x20 同一个目录下会互相覆盖。要都下，请拆成两个任务，或用单个 `url` + `name` 分别指定"
             );
+            skipped += 1;
+            continue;
         }
 
         entries.push(Entry {
@@ -206,28 +213,19 @@ https://a.com/2.zip
     }
 
     #[test]
-    fn trailing_slash_has_no_filename() {
-        let e = parse("https://a.com/dir/\n").unwrap_err().to_string();
-        assert!(e.contains("推不出文件名"), "{e}");
-        assert!(e.contains("第 1 行"), "要给行号: {e}");
+    fn trailing_slash_line_is_skipped_but_batch_continues() {
+        // 以 `/` 结尾的行推不出名字 ⇒ 跳过它，别把同批合法的那条也拖死
+        let p = parse("https://a.com/dir/\nhttps://a.com/ok.zip\n").unwrap();
+        assert_eq!(p.entries.len(), 1, "合法那条必须留着");
+        assert_eq!(p.entries[0].file_name, "ok.zip");
+        assert_eq!(p.skipped, 1);
+        // 只有这一条时才是错误（见 `no_valid_url_is_still_an_error`）
+        assert!(parse("https://a.com/dir/\n").is_err());
     }
 
     #[test]
     fn host_only_has_no_filename() {
         assert!(parse("https://example.com\n").is_err());
-    }
-
-    #[test]
-    fn duplicate_filename_is_an_error() {
-        let e = parse("https://a.com/x/1.zip\nhttps://b.com/y/1.zip\n")
-            .unwrap_err()
-            .to_string();
-        assert!(e.contains("同一个文件名"), "{e}");
-        assert!(e.contains("1.zip"), "{e}");
-        assert!(
-            e.contains("第 1 行") && e.contains("第 2 行"),
-            "要列两个行号: {e}"
-        );
     }
 
     #[test]
@@ -258,6 +256,33 @@ https://a.com/2.zip
     fn name_drops_query_even_when_query_contains_slashes() {
         let (n, _) = name_or_out_bin("https://a.com/f.zip?path=/x/y&sig=1");
         assert_eq!(n, "f.zip", "query 里的斜杠不能影响末段");
+    }
+
+    /// 一行坏 URL 不许连坐整批（红队 2026-11-22 实测：此前会整批 `bail`，合法那条一个字节都不下）。
+    #[test]
+    fn bad_line_is_skipped_not_fatal() {
+        let list = "https://h/a/..%2f..%2fpwned.bin\nhttps://h/ok.bin\n";
+        let p = parse(list).unwrap();
+        assert_eq!(p.entries.len(), 1, "合法那条必须留着");
+        assert_eq!(p.entries[0].file_name, "ok.bin");
+        assert_eq!(p.skipped, 1, "坏行要计数");
+    }
+
+    /// 重名也走「保留第一条 + 跳过后一条」，而不是炸掉整批。
+    #[test]
+    fn duplicate_name_keeps_first_and_skips_rest() {
+        let list = "https://h/a/x.bin\nhttps://h/b/x.bin\n";
+        let p = parse(list).unwrap();
+        assert_eq!(p.entries.len(), 1);
+        assert_eq!(p.entries[0].url, "https://h/a/x.bin");
+        assert_eq!(p.skipped, 1);
+    }
+
+    /// 但"一条有效的都没有"仍然是错误 —— 否则会变成"成功但什么都没下"。
+    #[test]
+    fn no_valid_url_is_still_an_error() {
+        assert!(parse("https://h/dir/\n").is_err());
+        assert!(parse("# 只有注释\n").is_err());
     }
 
     #[test]
