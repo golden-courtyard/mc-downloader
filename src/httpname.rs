@@ -163,7 +163,6 @@ mod tests {
         for h in [
             r#"attachment; filename="../../evil""#,
             r#"attachment; filename="a/b""#,
-            r#"attachment; filename="C:x""#,
             r#"attachment; filename="..""#,
             r#"attachment; filename="sub\\evil""#,
             "attachment; filename*=UTF-8''..%2F..%2Fevil",
@@ -173,6 +172,20 @@ mod tests {
                 None,
                 "应当拒绝并让调用方回落: {h}"
             );
+        }
+    }
+
+    /// 盘符这条是 **Windows 专属**规则（Linux 上 `:` 是合法文件名字符）。
+    ///
+    /// 2026-11-23 CI 在 ubuntu 上抓到过：把它写进上面那个无条件拒绝的列表，本地绿、CI 红 ——
+    /// 与 `pathsafe` 那批单测踩过的是同一个坑，所以这里按平台分开断言。
+    #[test]
+    fn drive_letter_is_rejected_only_on_windows() {
+        let got = filename_from_content_disposition(r#"attachment; filename="C:x""#);
+        if cfg!(windows) {
+            assert_eq!(got, None, "Windows 上带盘符的名字必须拒绝");
+        } else {
+            assert_eq!(got.as_deref(), Some("C:x"), "非 Windows 上它是合法的单段名");
         }
     }
 
