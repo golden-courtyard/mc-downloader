@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [main, master]
+    # 发布标签也要跑：tests/version_sync.rs 会在 tag 构建里断言「标签 == Cargo.toml 版本」。
+    # （dsh 的做法：CI 只检查、不写仓库；标签由人打完推上来。）
+    tags: ["mc-v*"]
   pull_request:
   workflow_dispatch:
 
