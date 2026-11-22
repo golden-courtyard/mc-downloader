@@ -41,7 +41,7 @@ mc-downloader.exe  <子命令>  <位置参数>  [--选项 值]...
 mc-downloader.exe fetch "<URL>" -d "<目录>" --piece-conns 16
 ```
 
-> ✅ **`-n` 是可选的**：不给就从 URL 末段推导（去掉 `?query` / `#fragment`、percent-decode）。
+> **`-n` 是可选的**：不给就从 URL 末段推导（去掉 `?query` / `#fragment`、percent-decode）。
 > 推不出（URL 以 `/` 结尾、只有主机名）才回落 `out.bin`，**并且会在输出里说明**。
 > 目标已存在时**默认拒绝**（退出码 1），要覆盖加 `--force`。
 
@@ -215,7 +215,7 @@ mc-downloader run my.toml --concurrency 8      # 等价
 
 **4 条只有 16 条的 1/5** —— 阿里云这类国内镜像对单连接限速在 0.75–1 MB/s，总吞吐随连接数近似线性增长。
 
-> ⚠️ **`probe` 测不出这个**。它测的是**单连接**吞吐，
+> 注意：**`probe` 测不出这个**。它测的是**单连接**吞吐，
 > 所以 `probe` 给你 1 MB/s 并不代表"这源就这样了"——它只告诉你"一条连接的价"。
 >
 > 判据：**`probe` 的单连接值明显低于你的实际带宽时，就该加 `--piece-conns`。**
