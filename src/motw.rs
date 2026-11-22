@@ -10,7 +10,6 @@
 //!
 //! 非 Windows 上 [`mark`] 是 no-op（这个机制是 Windows 专有的）。
 
-use std::io::Write;
 use std::path::Path;
 
 /// 会被标记的扩展名（小写比较）。
