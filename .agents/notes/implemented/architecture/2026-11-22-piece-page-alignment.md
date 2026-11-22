@@ -51,5 +51,8 @@ Status: implemented
 - 单测证据：`piece_size_is_page_aligned`、`every_piece_starts_on_page_boundary`、
   `floor_to_page_rounds_down_and_keeps_the_floor`、`state_roundtrip_preserves_non_default_conns`、
   `state_with_unaligned_piece_size_is_rejected`（`cargo test --lib` 139 passed）。
-- 实测证据（strace 前后对照）：见 `quant-report-20261122.md` 的 E3 一节 —— **以那份数据为准**，
-  本 note 不复制数字（数据与方法在报告，决策理由在这里）。
+- 实测证据（strace 前后对照，Kali/Linux，96 MiB + `--piece-conns 7`）：
+  **改前 6/7 个 `lseek` 偏移不是 4096 的倍数**（14,380,470 / 28,760,940 / 43,141,410 …，余数 3510、2924、2338…），
+  **改后 0/8 违规**（14,376,960 = 3510×4096；末片 24,576 B 止于 EOF，起点仍对齐）。
+  墙钟差异在噪声内（0.51 s vs 0.58 s，n=3）——**这也正是"只能是卫生"的证据**。
+  完整数据、口径与限制：`quant-report-20261122.md` §4（E3）。**数字以那份报告为准**，本 note 只记结论。
