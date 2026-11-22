@@ -11,6 +11,7 @@ pub mod forge;
 pub mod manifest;
 pub mod neoforge;
 pub mod pack;
+pub mod pathsafe;
 pub mod piece;
 pub mod progress;
 pub mod scheduler;

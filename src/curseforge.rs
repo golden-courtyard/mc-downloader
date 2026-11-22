@@ -375,17 +375,31 @@ impl CfResolved {
 }
 
 /// 分拣：可下载的变成 [`PackEntry`]（路径 `mods/<fileName>`），其余进人工清单。
+///
+/// `fileName` 来自 CurseForge 的 API 响应（别人写的元数据），不是可信输入：
+/// 含分隔符或 `..` 的，**降级进人工清单**而不是整包失败 —— 一个坏条目不该毁掉整次安装，
+/// 但也不能让它落盘（`pathsafe` 再兜一层）。
 pub fn split(resolved: Vec<CfResolved>) -> (Vec<PackEntry>, Vec<CfResolved>) {
     let mut entries = Vec::new();
     let mut manual = Vec::new();
     for r in resolved {
         match r.url.clone() {
-            Some(url) => entries.push(PackEntry {
-                path: format!("{MODS_DIR}/{}", r.file_name),
-                url,
-                sha1: r.sha1.clone(),
-                size: r.size,
-            }),
+            Some(url) => {
+                let Ok(name) = crate::pathsafe::check_name(&r.file_name) else {
+                    eprintln!(
+                        "[!] CurseForge 返回的文件名不安全，已放进人工清单: {:?} (project {})",
+                        r.file_name, r.project_id
+                    );
+                    manual.push(r);
+                    continue;
+                };
+                entries.push(PackEntry {
+                    path: format!("{MODS_DIR}/{name}"),
+                    url,
+                    sha1: r.sha1.clone(),
+                    size: r.size,
+                })
+            }
             None => manual.push(r),
         }
     }
