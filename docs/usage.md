@@ -190,6 +190,19 @@ mc-downloader run my.toml --concurrency 8      # 等价
 | `--timeout <秒>` | 30 | **建连超时与单次读超时**，不是整请求总时限 |
 | `--max-speed <5M>` | 不限 | **全局总带宽**，不是每连接一份 |
 
+**两个别名**：`--conns` = `--piece-conns`，`--jobs` = `--concurrency`（issue #14：想在 `fetch` 上临时调并发，
+不必去改配置文件）。它们都是 `global = true`，写在子命令前后都行。
+
+### 代理：支持哪些协议
+
+- `--proxy http://…` / `https://…` **可以用**。
+- `socks4` / `socks4a` / `socks5` / `socks5h` **不能用**：本 build 的 reqwest 没开 `socks` feature，
+  而那个代理会被**静默忽略**（流量直连 —— 2026-11-23 实测过：配 `socks5://127.0.0.1:1080` 后，
+  报的是"连接目标被拒"，说明根本没走代理）。所以现在**启动期直接报错**，不假装走代理。
+  要走 SOCKS 请自行用 `--features reqwest/socks` 重新编译。
+- **不配 `--proxy` 就是直连**：我们调 `no_proxy()`，**不读** `HTTP_PROXY` / `HTTPS_PROXY` 等环境变量
+  （可复现性靠这条）。
+
 ### `--piece-conns` 到底该给多少
 
 4 这个默认值不是随手定的——文献实测最优并行 TCP 连接数在 4~12 之间（Netscape 历史上就选 4）。

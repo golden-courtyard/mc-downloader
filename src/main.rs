@@ -24,12 +24,12 @@ struct Args {
     #[arg(long, global = true)]
     retry: Option<u32>,
 
-    /// 同时下载的文件数（默认 16）
-    #[arg(long, global = true)]
+    /// 同时下载的文件数（默认 16；别名 --jobs）
+    #[arg(long, global = true, visible_alias = "jobs")]
     concurrency: Option<usize>,
 
-    /// 单文件分片时的并发连接数（默认 4）
-    #[arg(long, global = true)]
+    /// 单文件分片时的并发连接数（默认 4；别名 --conns）
+    #[arg(long, global = true, visible_alias = "conns")]
     piece_conns: Option<usize>,
 
     /// 自适应连接数（AIMD：快则 +1，慢则减半；worker 上限为 2×piece-conns）

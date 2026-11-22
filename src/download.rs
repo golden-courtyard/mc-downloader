@@ -131,10 +131,29 @@ pub fn client(opts: &DownloadOpts) -> Result<reqwest::Client> {
         .connect_timeout(Duration::from_secs(opts.timeout_secs))
         .read_timeout(Duration::from_secs(opts.timeout_secs));
     b = match &opts.proxy {
-        Some(p) => b.proxy(reqwest::Proxy::all(p).with_context(|| format!("代理地址无效: {p}"))?),
+        Some(p) => {
+            // SOCKS **必须**在这里拦：本 build 的 reqwest 没开 `socks` feature，
+            // 而 `Proxy::all("socks5://…")` 不会报错 —— 它会被静默忽略，于是流量**直连**。
+            // 2026-11-23 实测：配 `socks5://127.0.0.1:1080` 后错误是「连接目标 127.0.0.1:1 被拒」，
+            // 也就是根本没走那个代理。用户以为在走代理，实际裸奔 —— 比报错危险得多。
+            if is_socks(p) {
+                anyhow::bail!(
+                    "本 build 不支持 SOCKS 代理（reqwest 未启用 `socks` feature）：`{p}`\n\
+                     \x20 现状下它会被**静默忽略**、流量直连 —— 所以这里直接拒绝，而不是假装走代理。\n\
+                     \x20 可用方案：① 改用一个 HTTP(S) 代理；② 自行用 `--features reqwest/socks` 重新编译。"
+                );
+            }
+            b.proxy(reqwest::Proxy::all(p).with_context(|| format!("代理地址无效: {p}"))?)
+        }
         None => b.no_proxy(),
     };
     Ok(b.build()?)
+}
+
+/// 这个代理串是不是 SOCKS 系（`socks4` / `socks4a` / `socks5` / `socks5h`，大小写不敏感）。
+fn is_socks(p: &str) -> bool {
+    let lower = p.trim().to_ascii_lowercase();
+    lower.starts_with("socks")
 }
 
 /// 在 blocking 线程池里算文件 SHA1，避免阻塞 tokio worker
@@ -1145,6 +1164,35 @@ mod tests {
             ..Default::default()
         };
         assert!(client(&o).is_err(), "非法代理地址应当报错，而不是静默直连");
+    }
+
+    /// SOCKS 必须**启动期**拒绝。
+    ///
+    /// 本 build 的 reqwest 没开 `socks` feature，而 `Proxy::all("socks5://…")` 不报错、
+    /// 那个代理会被静默忽略 ⇒ 流量直连。2026-11-23 实测：配 `socks5://127.0.0.1:1080`
+    /// 后错误是"连接目标 127.0.0.1:1 被拒"，说明根本没走代理。用户以为在走代理，
+    /// 实际裸奔 —— 这比直接报错危险得多，所以这里钉死"必须报错"。
+    #[test]
+    fn client_rejects_socks_because_feature_is_off() {
+        for p in [
+            "socks5://127.0.0.1:1080",
+            "socks5h://127.0.0.1:1080",
+            "SOCKS4://127.0.0.1:1080",
+        ] {
+            let o = DownloadOpts {
+                proxy: Some(p.into()),
+                ..Default::default()
+            };
+            let e = client(&o).expect_err("SOCKS 代理必须被拒绝，绝不能静默直连");
+            let msg = format!("{e:#}");
+            assert!(msg.contains("不支持 SOCKS"), "{p}: {msg}");
+        }
+        // 反向：http 代理不能被这条误伤
+        let ok = DownloadOpts {
+            proxy: Some("http://127.0.0.1:7897".into()),
+            ..Default::default()
+        };
+        assert!(client(&ok).is_ok());
     }
 
     #[test]
