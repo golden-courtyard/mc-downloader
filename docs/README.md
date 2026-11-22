@@ -15,6 +15,7 @@
 | 接下来打算做什么 | [design/archive/](design/archive/) |
 | 某个版本改了什么 | [CHANGELOG.md](../CHANGELOG.md) |
 | 要发一个版本 | [dev/release.md](dev/release.md) |
+| 版本号怎么跳、标签怎么打 | [dev/versioning.md](dev/versioning.md) |
 | 平台范围（Windows / Linux / macOS） | [design/platform-scope.md](design/platform-scope.md) |
 | 测试设施（云服务器 / Kali / Docker） | [dev/testing-infrastructure.md](dev/testing-infrastructure.md) |
 | 攻防靶场（只打自己的靶） | [dev/attack-defense-lab.md](dev/attack-defense-lab.md) |

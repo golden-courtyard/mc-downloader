@@ -20,10 +20,7 @@ cargo build --release --locked
 
 - [ ] `README.md` 的「验证状态」表更新到本次日期，**结构对 / 真的能跑**分开写
 - [ ] `CHANGELOG.md` 新增本次版本一节，**已知残留**必须写（没做的比做了的更需要写下来）
-- [ ] `Cargo.toml` 版本号按语义化版本跳：
-  - 破坏性（用户必须改配置/改脚本）→ minor
-  - 只加功能 → minor
-  - 只修 bug → patch
+- [ ] `Cargo.toml` 版本号按 [versioning.md](versioning.md) 跳（0.x：破坏性 / 只加功能 → minor，只修 bug → patch，**不跳号**）
 - [ ] `Cargo.lock` 跟着更新（`cargo build` 一次即可，diff 应只有本包那一行）
 - [ ] `docs/user/usage.md` 里新增/变更的参数都有条目
 - [ ] 文档 emoji 扫描为 0（仓库规矩）
@@ -32,11 +29,12 @@ cargo build --release --locked
 ## 3 打标签
 
 ```bash
-git tag -a v0.6.0 -m "v0.6.0"
-git push origin v0.6.0
+git tag mc-v0.6.0            # 轻量标签（与 dsh 同形：<包简写>-v<semver>）
+git push origin mc-v0.6.0
 ```
 
-标签名与 `Cargo.toml` 的版本号**必须一致** —— 不一致的发布物无法追溯是哪个提交编出来的。
+- 标签形态与跳号规则见 [versioning.md](versioning.md)：`mc-v<x.y.z>`，预发布加 `-alpha.N` / `-rc.N`；
+- 标签里的版本号与 `Cargo.toml` 的 `version` **必须一致** —— 不一致的发布物无法追溯是哪个提交编出来的。
 
 ### 改工作流之前先本地解析
 

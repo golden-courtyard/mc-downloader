@@ -97,7 +97,8 @@ src/
 - 提交信息中文，`type(scope): 一句话`，body 写**为什么**；一次提交别混两件不相关的事。
 - 文档不用 emoji。
 - 改了行为/参数，同一次提交里更新 `README.md` 的「验证状态」与 `docs/user/usage.md`。
-- 发布流程见 [docs/dev/release.md](docs/dev/release.md)（含"本地绿不等于 CI 绿"这条）。
+- 发布流程见 [docs/dev/release.md](docs/dev/release.md)（含"本地绿不等于 CI 绿"这条）；
+  版本号怎么跳、标签长什么样见 [docs/dev/versioning.md](docs/dev/versioning.md)。
 
 ## 8 已知的边界（别当 bug 修）
 

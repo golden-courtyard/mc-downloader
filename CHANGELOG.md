@@ -2,6 +2,12 @@
 
 本文件记录用户可见的变化。格式参考 Keep a Changelog，版本号遵循语义化版本。
 
+## [Unreleased]
+
+（下一次发布前的新增改动记在这里；发布时整体改标题为 `[x.y.z] - YYYY-MM-DD`，内容不洗。）
+
+版本号怎么跳、标签长什么样，见 [docs/dev/versioning.md](docs/dev/versioning.md)。
+
 ## [0.6.0] - 2026-11-23
 
 ### 破坏性变更
