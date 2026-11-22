@@ -38,11 +38,12 @@
 ```bash
 cargo fmt --all                                     # ① 格式（pre-commit 门会拦）
 cargo clippy --all-targets --locked -- -D warnings   # ② lint（-D warnings = 警告即错）
+cargo deny check                                    # ②b 依赖：许可证 / RustSec 公告 / 只从 crates.io 取
 CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（lib 当前 186 条）
 cargo build --release                               # ④ 产物：target/release/mc-downloader.exe
 ```
 
-**注意：提交前必须跑完 ①②③**。这不是建议 —— **2026-10-25 曾因只跑「能编译 + 单测」而连续 5 次 CI 失败**：
+**注意：提交前必须跑完 ①②③（改过 `Cargo.toml` 再加 ②b）**。这不是建议 —— **2026-10-25 曾因只跑「能编译 + 单测」而连续 5 次 CI 失败**：
 CI 查的是 fmt / clippy / test 三样，而我只验了后两样的一半。
 
 **注意：③ 为什么带 `CARGO_INCREMENTAL=0`**（2026-10-28 两次独立交付各踩一次）：

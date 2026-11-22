@@ -6,6 +6,7 @@
 
 ```bash
 cargo fmt --all -- --check
+cargo deny check                                      # 许可证 / RustSec 公告 / 只从 crates.io 取
 cargo clippy --all-targets --locked -- -D warnings
 CARGO_INCREMENTAL=0 cargo test --all-targets --locked
 cargo build --release --locked
@@ -46,6 +47,23 @@ python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"
 GitHub 的报错只有一句 "This run likely failed because of a workflow file issue"，不指行；
 而 YAML 缩进错一级（例如把 `services:` 写成 6 空格而 job 的键是 4 空格）本地一解析就能看见。
 2026-11-23 因为这一条连推两次红。
+
+
+### 静态扫描（CodeQL）：试过，当前不可用
+
+2026-11-23 加过 `.github/workflows/codeql.yml`（`languages: rust`、`build-mode: none`、v4 动作、含 `actions: read`），
+CI 上两次都失败，最终原因很明确：
+
+```
+Advanced Security must be enabled for this repository to use code scanning.
+```
+
+即 **代码扫描需要 GitHub Advanced Security**，而本仓库是**私有**的。GitHub 的规则是代码扫描对**公开仓库免费**，
+私有仓库要 GHAS 授权。所以：
+
+- **现在不启用**，workflow 已删除 —— 不留红门禁，也不留 `continue-on-error` 的假门禁；
+- **仓库转公开后再加**：把原 YAML 放回去即可（内容记录在 issue #17 的评论里）；
+  能用之后它是第四类检查（安全），与 `cargo-deny` 的依赖面互补（CodeQL 看代码，deny 看依赖树）。
 
 ## 4 推送后真的看 CI
 
