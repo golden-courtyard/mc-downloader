@@ -23,7 +23,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $repo $Raw) | Out-Null
 $target = 'C:\quant-target-e5'
 
 $srv = Start-Process python -ArgumentList @((Join-Path $repo 'scripts\quant\always500.py'),
-        '--port', "$Port", '--log', $log) -WindowStyle Hidden -PassThru
+        '--port', "$Port", '--log', $log) -NoNewWindow -PassThru
 Start-Sleep -Seconds 1
 try {
     $rows = @()
