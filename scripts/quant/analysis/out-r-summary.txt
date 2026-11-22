@@ -1,0 +1,18 @@
+R fit (T = a*B + b*H, no intercept)
+             group  n a_s_per_byte  b_s_per_hop   BW_MBps   t_hop_ms   p_min_MB
+2.5%  e1-unlimited 18 1.373428e-09 0.0118492293 694.37516 11.8492293 82.2781049
+2.5%1  e1-netem400 18 2.109968e-08 0.0004228849  45.19853  0.4228849  0.1911378
+             R2     BW_lo     BW_hi  t_hop_lo  t_hop_hi  p_min_lo   p_min_hi
+2.5%  0.9583731 956.07480 563.94798  6.800188 16.868749 40.081122 154.980474
+2.5%1 0.9997050  45.83198  44.54645 -2.965784  2.390675 -1.327499   1.092642
+      knee_conns
+2.5%           4
+2.5%1          4
+
+Piece-level percentiles (1 GiB runs)
+  concurrency bursts    P50     P95     P99 P99_over_P50
+1           1      3 0.0423 0.05535 0.05651     1.335934
+2          15      1 0.1051 0.10510 0.10510     1.000000
+3          16      5 0.1056 0.15290 0.15874     1.503220
+
+E5 clustering: 4/4 waves within 200 ms; binomial p=0.000357 (null p=0.138)
