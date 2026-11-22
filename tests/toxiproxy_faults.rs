@@ -216,9 +216,11 @@ fn latency_does_not_break_a_download() {
 
     let dir = tmpdir("lat");
     let dst = dir.join("f.bin");
-    let mut opts = DownloadOpts::default();
-    opts.timeout_secs = 10;
-    opts.piece_conns = 1; // 单片，避免并发把延迟叠加成额外的不确定性
+    let opts = DownloadOpts {
+        timeout_secs: 10,
+        piece_conns: 1, // 单片，避免并发把延迟叠加成额外的不确定性
+        ..DownloadOpts::default()
+    };
     let jobs = vec![job(
         format!("http://127.0.0.1:{listen}/f.bin"),
         payload.len() as u64,
@@ -275,10 +277,13 @@ fn dead_link_does_not_hang_and_leaves_no_full_file() {
 
     let dir = tmpdir("stall");
     let dst = dir.join("s.bin");
-    let mut opts = DownloadOpts::default();
-    opts.timeout_secs = 2; // 窗口 = max(10s, 2×2) = 10s
-    opts.retries = 1;
-    opts.piece_conns = 1;
+    // `retries: 1` 而非 0：连"重试一次之后仍然不挂死"也一起钉住
+    let opts = DownloadOpts {
+        timeout_secs: 2, // 停滞窗口 = max(10s, 2×2) = 10s
+        retries: 1,
+        piece_conns: 1,
+        ..DownloadOpts::default()
+    };
     let jobs = vec![job(
         format!("http://127.0.0.1:{listen}/s.bin"),
         payload.len() as u64,
