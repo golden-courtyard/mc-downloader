@@ -29,7 +29,10 @@ mc-v0.7.0-rc.2
 - **类型**：**轻量标签**（`git tag mc-v0.6.0`，不带 `-a`）。dsh 的 44 个 tag 都是 `commit` 类型；
   附注信息写在发布提交里，不重复存一份。
 - **一致性**：标签里的版本号**必须**等于 `Cargo.toml` 的 `version`。改一处忘另一处 = 发布物无法追溯。
-- **每个 tag 对应一个 `release(mc): x.y.z` 提交**：该提交只做三件事 —— 改 `Cargo.toml`、刷新 `Cargo.lock`、
+- **每个 tag 对应一个 `release(mc): x.y.z` 提交**
+> 首个标签 `mc-v0.6.0` 指向 `1c30449`（提交信息是 `docs: 版本号与标签规则…`，因为它同时冻结了 CHANGELOG）。
+> 从 `0.7.0` 起严格执行上面这条：**tag 只打在 `release(mc): x.y.z` 那个提交上**。
+：该提交只做三件事 —— 改 `Cargo.toml`、刷新 `Cargo.lock`、
   把 CHANGELOG 的 `[Unreleased]` 收成版本节。
 
 ## 三、跳哪一位（0.x 阶段）
