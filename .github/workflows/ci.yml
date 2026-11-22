@@ -63,3 +63,59 @@ jobs:
       # 放这里是为了两件本地替代不了的事：Linux 平台，以及 --locked 的一致性。
       - name: Build (release)
         run: cargo build --release --locked
+
+  # 发布物是 .exe，而 Windows 专属分支在 ubuntu 上**要么不编译、要么不执行**：
+  # `cfg!(windows)` 的运行时分支（NTFS ADS / 保留名 / 大小写不敏感比较）、`#[cfg(windows)]` 的测试、
+  # 以及 `use std::io::Write` 这种平台限定的导入。这类分歧已经咬过三次（本地绿、CI 红）。
+  check-windows:
+    runs-on: windows-latest
+    env:
+      TEST_FLOOR: 195
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Toolchain
+        run: |
+          rustup update stable
+          rustup component add rustfmt clippy
+          cargo -V && rustc -V
+
+      - uses: Swatinem/rust-cache@v2
+
+      # 不设 REQUIRE_SPARSE：读它的测试文件整个 `#![cfg(target_os = "linux")]`，
+      # 在这个平台上根本不存在 —— 设了就是一个没人读的开关，日志上像有保护，实际没有。
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --all-targets --locked
+
+      # `0 tests` / SKIP / 被删掉的测试，在 cargo 输出里和 passed 长得一样。
+      # 唯一的机器判据是"确实列出了这么多条"。
+      - name: Test count floor
+        shell: bash
+        run: |
+          n=$(cargo test --all-targets --locked -- --list 2>/dev/null | grep -c ': test$')
+          echo "listed $n tests (floor ${TEST_FLOOR})"
+          [ "$n" -ge "$TEST_FLOOR" ] || { echo "::error::only $n tests listed"; exit 1; }
+
+  # `rust-version = "1.99"` 如果没人用 1.99 编一次，它就只是一条注释：
+  # `clippy::incompatible_msrv` 只查 std API，不查语言特性（let-chain 这类），更不查依赖的 MSRV。
+  # `--locked` 必须带：否则 cargo 会按 MSRV 重新解析，把"能不能编"偷换成"能不能解"。
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check at declared MSRV
+        run: cargo check --all-targets --locked
+
+      - name: Clippy at declared MSRV
+        run: cargo clippy --all-targets --locked -- -D warnings

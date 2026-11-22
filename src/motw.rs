@@ -55,6 +55,7 @@ pub fn mark(path: &Path, source_url: &str) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         use std::ffi::OsString;
+        use std::io::Write; // 只有这个分支用 `write!`；放文件顶会在 Linux 上变成未用导入
         let mut ads: OsString = path.as_os_str().to_os_string();
         ads.push(":Zone.Identifier");
         let mut f = std::fs::OpenOptions::new()
