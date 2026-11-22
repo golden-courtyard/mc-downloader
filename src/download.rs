@@ -876,6 +876,16 @@ async fn fetch_piece(
             // 刻意**不** record_failure：源没问题，只是不支持分片。
             return Err(anyhow::Error::new(RangeUnsupported { url }));
         }
+        if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            // 416 = "这个区间我给不出来"，**恰恰说明它支持 Range**。
+            // 常见成因是远端对象变小/被换掉了（我们的 `size` 比它大），
+            // 所以别报成"不支持 Range"——那句话会把排查引到完全相反的方向。
+            pool.record_failure(idx);
+            anyhow::bail!(
+                "服务器回 416（区间不可满足）：远端文件可能已变小或被替换 \
+                 （请求 bytes={req_start}-{req_end_incl}）: {url}"
+            );
+        }
         pool.record_failure(idx);
         anyhow::bail!("服务器不支持 Range（HTTP {status}），无法分片: {url}");
     }
