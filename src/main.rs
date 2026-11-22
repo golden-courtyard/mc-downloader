@@ -182,6 +182,12 @@ async fn main() -> Result<()> {
             None => "（没有配置文件，全走默认）".to_string(),
         };
         println!("[*] 配置文件: {src}");
+        // 「默认放哪里」是用户最常问的一个问题，而"没有配置文件"时上面那句只说没读到、
+        // 不说它在哪儿找过 —— 补一行查找路径（不保证存在，但用户就知道该往哪写）。
+        for (i, p) in settings::search_paths().iter().enumerate() {
+            let mark = if p.exists() { "存在" } else { "不存在" };
+            println!("[*] 查找路径 {}: {}（{mark}）", i + 1, p.display());
+        }
         println!("{:<14} {:<24} 来源", "键", "生效值");
         for (k, v, s) in &merged.rows {
             println!("{k:<14} {v:<24} {s}");

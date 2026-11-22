@@ -190,6 +190,24 @@ pub fn default_path() -> Option<PathBuf> {
     }
 }
 
+/// 配置文件的**候选路径**（按查找顺序），给 `--print-config` 用来说明"它在哪找过"。
+///
+/// 与 [`locate`] 的区别：`locate` 返回"实际读到的那个"（可能一个都没有）；
+/// 这里返回**全部候选**，不管存不存在 —— 用户问的正是"该往哪写"。
+/// 不含 `--config`（那是运行时给的，`main` 自己知道）。
+pub fn search_paths() -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    if let Some(p) = std::env::var_os(ENV_VAR)
+        && !p.is_empty()
+    {
+        v.push(PathBuf::from(p));
+    }
+    if let Some(p) = default_path() {
+        v.push(p);
+    }
+    v
+}
+
 /// 决定要读哪个文件：`--config` > 环境变量 > 平台默认（**只有存在时才用**）。
 ///
 /// 返回 `None` 表示"没有任何配置文件"，调用方据此全走默认。

@@ -75,4 +75,9 @@ fn print_config_works_without_a_subcommand_and_lists_every_key() {
         s.contains("default") || s.contains("config") || s.contains("cli"),
         "来源列缺失：\n{s}"
     );
+    // 「默认放哪里」是用户最常问的一个问题：没有配置文件时也必须把**查找路径**打出来
+    assert!(
+        s.contains("查找路径"),
+        "--print-config 应告诉用户它在哪里找配置：\n{s}"
+    );
 }

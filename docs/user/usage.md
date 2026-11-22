@@ -49,7 +49,8 @@ mc-downloader.exe fetch "<URL>" -d "<目录>" --piece-conns 16
 
 ## 源：必须先自己配（issue #15）
 
-**本工具不内置任何下载源**，官方或第三方都不内置。anilla / un / pack 都要先有源，
+**本工具不内置任何下载源**，官方或第三方都不内置。 anilla / 
+un / pack 都要先有源，
 否则直接报错并告诉你缺哪一项：
 
 ```
@@ -59,7 +60,19 @@ Error: 未配置下载源（[source].metadata）。
   只想下单个文件？mc-downloader fetch <url> -d <dir> 不需要任何源。
 ```
 
-配置文件里这么写（--config <path>，或放到平台配置目录）：
+**配置文件的默认位置**：
+
+| 平台 | 路径 |
+|---|---|
+| Windows | `%APPDATA%\mc-downloader\config.toml`（本机实测：`C:\Users\<you>\AppData\Roaming\mc-downloader\config.toml`） |
+| Linux / macOS | `$XDG_CONFIG_HOME/mc-downloader/config.toml`，未设置则 `~/.config/mc-downloader/config.toml` |
+
+查找顺序：`--config <路径>` > 环境变量 `MC_DOWNLOADER_CONFIG` > 上面那张表的平台默认（**只有文件存在时才用**）。
+**不读当前目录下的 `config.toml`** —— “在 CWD 放一个就生效”是很多工具的陷阱，也是难排查的一类问题。
+
+不确定读的是哪个？`mc-downloader --print-config` 会把它**找过的路径**、哪个存在、每个键的生效值与来源层全部打印出来。
+
+配置文件里这么写（`--config <path>`，或放到平台配置目录）：
 
 ```toml
 [source]
@@ -71,7 +84,7 @@ forge_maven = "https://<你的源>"
 neoforge    = "https://<你的源>"
 ```
 
-六项**全必填**（用到哪个加载器就得配哪个）。etch <url> 不受影响 —— 你给地址、它只做传输。
+六项**全必填**（用到哪个加载器就得配哪个）。 `fetch <url>` 不受影响 —— 你给地址、它只做传输。
 
 **为什么**：2026-10-20 PCL2 移除 MC 下载功能（「为遵守相关法律法规」）——「第三方工具内置下载通道」
 处在合规灰区。所以「知道去哪下」由你决定，工具只负责下得对、下得快。
