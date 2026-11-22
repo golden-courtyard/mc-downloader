@@ -2,3 +2,7 @@
 
 # net_faults 实跑报告是生成物（每次跑内容都变、含时间戳），要归档请手工拷到 docs/ 并去掉时间戳
 net_faults-report-*.md
+
+# Python 字节码不是产物：E1-E6 那轮误把 6 个 .pyc 提交进来了
+__pycache__/
+*.pyc
