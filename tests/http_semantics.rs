@@ -107,7 +107,7 @@ impl Drop for TempDir {
 
 // ─────────────────────── 本地畸形 HTTP 服务 ───────────────────────
 
-/// 五类「服务器说的话和做的事不一致」。
+/// 六类「服务器说的话和做的事不一致」。
 #[derive(Clone, Copy, Debug)]
 enum Fault {
     /// 206 + 长度正确，但 `Content-Range` 起点比请求的位置多 7 字节。
@@ -118,8 +118,10 @@ enum Fault {
     LyingSmall,
     /// 声明整片长度，只发一半就关连接。
     TruncateMid,
-    /// 声明 `Accept-Ranges: bytes`，却对 Range 请求回 200 整份。
+    /// 声明 `Accept-Ranges: bytes`，却对 Range 请求回 200 整份（#6：客户端应降级单流）。
     AcceptRangesBut200,
+    /// 206 且区间正确，但 `Content-Range` 总长比真文件多 1（#7A：远端对象被换掉）。
+    WrongTotal,
 }
 
 /// 最小 HTTP 服务：只解析请求头里的 `Range:`，按 [`Fault`] 回畸形响应。
@@ -242,17 +244,39 @@ fn serve(mut stream: TcpStream, fault: Fault, payload: &[u8]) -> io::Result<()> 
 
     match fault {
         Fault::AcceptRangesBut200 => {
-            // 缺陷是**状态码**（对 Range 请求回 200），body 多大都不影响判据：
-            // 客户端在 `send()` 拿到 head 之后就会因状态码不对退出。
-            // 刻意只发 4 KiB：整份 10 MiB 写不完就会被对端关掉，
-            // 那会引入「客户端还没解析完 head 就吃到 RST」的传输层噪声，把语义测试变成竞态测试。
-            let body = &payload[..payload.len().min(4 * 1024)];
+            // 模拟「忽略 Range」的服务器：对 Range 请求也回 200 + **整份** body。
+            //
+            // #6 的判据是「降级后整份能下完」⇒ 必须发完整 payload。早先这里只发 4 KiB
+            //（理由是避免客户端没解析完 head 就吃到 RST），但那会让降级测试变成假绿：
+            // 降级后的单流最多只拿到 4 KiB，sha1 永远对不上。
+            //
+            // 第一批 Range 请求的客户端拿到 head 就退出并 abort 连接，那几条连接上的写
+            // 会失败（`let _ =` 忽略），不影响降级后的那条新连接。
             let headers = [
                 ("Accept-Ranges", "bytes".to_string()),
-                ("Content-Length", body.len().to_string()),
+                ("Content-Length", total.to_string()),
                 ("Connection", "close".to_string()),
             ];
             write_response_head(&mut stream, 200, "OK", &headers)?;
+            let _ = stream.write_all(payload);
+        }
+        Fault::WrongTotal => {
+            // 区间完全正确、只有总长多 1：用来锁「总长与 job.size 比对」这条分支，
+            // 而不是让它落到最后的全文件 sha1 失败。
+            let Some((start, end_excl)) = range else {
+                return Ok(());
+            };
+            let body = &payload[start..end_excl];
+            let wrong_total = total + 1;
+            let headers = [
+                (
+                    "Content-Range",
+                    format!("bytes {start}-{}/{wrong_total}", end_excl - 1),
+                ),
+                ("Content-Length", body.len().to_string()),
+                ("Connection", "close".to_string()),
+            ];
+            write_response_head(&mut stream, 206, "Partial Content", &headers)?;
             let _ = stream.write_all(body);
         }
         Fault::ShortRange => {
@@ -426,7 +450,7 @@ fn has_reqwest_error(err: &anyhow::Error) -> bool {
         .any(|cause| cause.downcast_ref::<reqwest::Error>().is_some())
 }
 
-// ─────────────────────────── 五类故障 ───────────────────────────
+// ─────────────────────────── 六类故障 ───────────────────────────
 
 /// 故障 1：206 + 长度正确，但 `Content-Range` 起点不是请求的位置。
 ///
@@ -594,18 +618,53 @@ async fn truncate_mid_is_detected_while_reading_body() {
     assert_no_complete_artifact(dir.path(), "out.bin", &expect_sha1, LABEL);
 }
 
-/// 故障 5：声明 `Accept-Ranges: bytes`，却对 Range 请求回 200 整份。
+/// 故障 5：声明 `Accept-Ranges: bytes`，却对 Range 请求回 200 整份（issue #6）。
 ///
-/// **现状**：`fetch_piece` 只认 206，看到 200 就报「服务器不支持 Range」⇒ 整文件失败。
-/// issue #2 期望的是「回退单流」；本轮只固化现状（函数名带 `today`），
-/// 回退留给 issue（派发单提到 issue #6，本地仓目前只有 #2~#4，故注释只指向 #2）。
-/// 将来回退落地时，这条测试**必须**改写——它是「现状」的锚点，不是期望行为。
+/// 判据是「**降级**」而不是「报错」：200 的 body 本来就是整份，客户端应退回单流把文件
+/// 完整下完（`run` 返回 Ok）。同时验证降级收尾干净：`.part` 不残留
+///（降级前清 `.part.state`，再由 `one_stream` 的 `File::create` 截断重写）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn range_answered_with_200_is_rejected_today() {
-    const LABEL: &str = "no-accept-ranges";
-    let dir = TempDir::new("no-accept-ranges");
+async fn range_answered_with_200_falls_back_to_stream() {
+    const LABEL: &str = "range-200-fallback";
+    let dir = TempDir::new("range-200-fallback");
     let payload = Arc::new(pattern(PAYLOAD, 6));
+    let expect_sha1 = sha1_hex(&payload);
     let server = FaultServer::start(Fault::AcceptRangesBut200, payload.clone());
+    let job = job_with_sha1(&server.url("blob.bin"), &payload);
+
+    run(std::slice::from_ref(&job), dir.path(), &test_opts())
+        .await
+        .expect("服务器对 Range 回 200 时应降级为单流并下完，而不是报错");
+
+    let got = fs::read(dir.join("out.bin")).expect("降级成功后应有成品");
+    assert_eq!(
+        got.len(),
+        PAYLOAD,
+        "{LABEL}: 成品必须是整份 {PAYLOAD} 字节（不是 head 截断后的残片）"
+    );
+    assert_eq!(
+        sha1_hex(&got),
+        expect_sha1,
+        "{LABEL}: 成品内容与整份载荷的 sha1 必须一致"
+    );
+    assert!(
+        !dir.join("out.bin.part").exists(),
+        "{LABEL}: 降级收尾后不应残留 .part"
+    );
+}
+
+/// 故障 6：206 的 `Content-Range` 区间正确，但**总长比 `job.size` 多 1**（issue #7A）。
+///
+/// 判据：不能等到最后全文件 sha1 失败才让人猜「是算错了还是源站换了文件」——
+/// 分片校验处就要直接报「远端文件大小变了」，并同时给出服务器声明的总长与期望总长。
+/// 成品不落地。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn content_range_total_mismatch_is_rejected() {
+    const LABEL: &str = "wrong-total";
+    let dir = TempDir::new("wrong-total");
+    let payload = Arc::new(pattern(PAYLOAD, 8));
+    let expect_sha1 = sha1_hex(&payload);
+    let server = FaultServer::start(Fault::WrongTotal, payload.clone());
     let job = job_with_sha1(&server.url("blob.bin"), &payload);
 
     let err = expect_error(dir.path(), &job, LABEL).await;
@@ -613,14 +672,18 @@ async fn range_answered_with_200_is_rejected_today() {
     println!("[{LABEL}] {msg}");
 
     assert!(
-        msg.contains("服务器不支持 Range（HTTP 200 OK）"),
-        "{LABEL}: 现状是「不支持 Range」这条分支，且错误里要带服务器的状态码，实际: {msg}"
+        msg.contains("远端文件大小变了"),
+        "{LABEL}: 必须直接报「远端文件大小变了」，而不是等到最后 sha1 失败，实际: {msg}"
     );
     assert!(
-        msg.contains("无法分片"),
-        "{LABEL}: 错误里要说明这是分片路径的限制，实际: {msg}"
+        msg.contains(&format!("总长 {}，期望 {}", PAYLOAD + 1, PAYLOAD)),
+        "{LABEL}: 错误里要同时出现服务器给的总长与期望总长，实际: {msg}"
     );
-    assert!(!dir.join("out.bin").exists(), "{LABEL}: 失败后不应落成品");
+    assert!(
+        msg.contains("Content-Range 校验失败"),
+        "{LABEL}: 应当从分片校验出口冒出来，实际: {msg}"
+    );
+    assert_no_complete_artifact(dir.path(), "out.bin", &expect_sha1, LABEL);
 }
 
 // ─────────────────── 契约锚点：size 只是提示，不是校验 ───────────────────
