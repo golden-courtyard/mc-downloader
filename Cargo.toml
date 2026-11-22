@@ -74,3 +74,7 @@ manual_let_else = "warn"   # 促使 match -> let-else
 redundant_clone = "warn"
 needless_pass_by_value = "warn"
 
+[dev-dependencies]
+proptest = "1"
+rstest = "0.23"
+
