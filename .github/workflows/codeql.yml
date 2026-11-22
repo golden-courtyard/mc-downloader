@@ -18,10 +18,13 @@ jobs:
     permissions:
       security-events: write
       contents: read
+      # CodeQL 会读本次 workflow run 的信息（遥测/状态）；缺这条会以
+      # "Resource not accessible by integration" 失败 —— 2026-11-23 实测过。
+      actions: read
     steps:
       - uses: actions/checkout@v7
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: rust
           build-mode: none
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
