@@ -218,7 +218,13 @@ pub async fn run(jobs: &[Job], root: &Path, opts: &DownloadOpts) -> Result<()> {
                 // 记下来继续；最后统一报，不在这里打印（并发下会串行刷屏）
                 failed.push(format!("{e:#}"));
             }
-            Err(e) => return Err(e).with_context(|| "下载中断"),
+            Err(e) => {
+                // 早退也要停掉进度线程：否则它在同一屏上打「完成」，紧跟着的
+                // 「下载中断」就自相矛盾（实测：http_semantics 的 lying-large 用例
+                // 会打印 `[ 10.0 MB / 10.0 MB ] 完成` 然后报超时中断）。
+                reporter.abort();
+                return Err(e).with_context(|| "下载中断");
+            }
         }
     }
 

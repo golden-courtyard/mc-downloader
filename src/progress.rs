@@ -172,7 +172,11 @@ impl Progress {
             ));
         }
         if done >= total {
-            return Some(format!("[ {} / {} ]  完成", human(total), human(total)));
+            // 字节搬完了 ≠ 下载成功。`lying-large` 那类响应（发够字节但不关连接）
+            // 会把 done 推到 total，而失败要等读超时才出现 —— 实测这里原来每秒打一次
+            // 「完成」，紧接着下游报「下载中断」，同一屏自相矛盾。
+            // ⇒ 完成与否只由**知道结果的人**宣布：`run` 的汇总行 / `fetch` 的 `[+] 完成`。
+            return None;
         }
         let eta = (total - done) as f64 / speed.max(1.0);
         Some(format!(
@@ -296,6 +300,20 @@ mod tests {
         // 仍在 0.2s 内 -> None（避免抖动）
         // 用 sleep 太慢，这里只验证 add 后 done 正确
         assert_eq!(p.done(), 100);
+    }
+
+    /// 字节搬完 ≠ 下载成功：`lying-large` 那种「发够字节但保持连接」的响应会把
+    /// done 推到 total，而失败要等读超时才出现。进度行**不许**宣布「完成」。
+    #[test]
+    fn line_never_announces_completion() {
+        let p = Progress::new(100);
+        p.add(100);
+        // 先越过 0.2s 的防抖门槛，这样 None 只可能来自「完成不由进度行宣布」这条规则
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        assert!(
+            p.line().is_none(),
+            "done >= total 时不该再打印进度行（完成与否由调用方宣布）"
+        );
     }
 
     #[test]
