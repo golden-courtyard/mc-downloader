@@ -870,32 +870,10 @@ mod tests {
         assert!(o.proxy.is_none());
     }
 
-    #[test]
-    fn split_for_never_yields_zero() {
-        let o = DownloadOpts::default(); // 16
-        assert_eq!(o.split_for(4).concurrency, 4);
-        // 任务数多于总并发：每任务至少 1，不能出现 0（否则 buffer_unordered(0) 永不推进）
-        assert_eq!(o.split_for(32).concurrency, 1);
-        // n=0 不该除零
-        assert_eq!(o.split_for(0).concurrency, 16);
-    }
-
-    #[test]
-    fn split_for_preserves_other_fields() {
-        let o = DownloadOpts {
-            proxy: Some("http://127.0.0.1:7897".into()),
-            retries: 7,
-            adaptive: true,
-            timeout_secs: 9,
-            ..Default::default()
-        };
-        let s = o.split_for(2);
-        assert_eq!(s.proxy, o.proxy);
-        assert_eq!(s.retries, 7);
-        assert!(s.adaptive);
-        assert_eq!(s.timeout_secs, 9);
-        assert_eq!(s.concurrency, 8);
-    }
+    // `split_for` 的用例已迁到 `tests/params_split_for.rs`（rstest 参数化）：
+    //   边界 0 / 1 / 4 / 16 / 17 / 32 / usize::MAX 等 9 个 case，外加两个属性断言
+    //   （每任务至少 1 条、且不超过原并发）。原来这里两个手写函数做的事完全同构，
+    //   加一个边界就要再写一个函数 —— 迁移的目的不是"少写几行"，是让加用例变成加一行。
 
     #[test]
     fn client_builds_with_default_opts() {
