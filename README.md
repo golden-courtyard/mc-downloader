@@ -86,6 +86,7 @@ mc-downloader pack "xxx.mrpack" -d "D:/Games/.minecraft"
 | **1.20.1 + Fabric 0.19.5 → 实际启动** | ✅ **用户用 PCL 实测，可进入游戏** |
 | CurseForge 整合包 188 个 mod 对账 | ✅ 三个包全都对得上（`mods/` + `manual.txt` = manifest 条数）|
 | **NeoForge 21.1.265（MC 1.21.1）** | ✅ **真机通过（2026-10-27）** —— `EXIT=0`·210s·`mainClass = cpw.mods.bootstraplauncher.BootstrapLauncher`·产物 `versions/neoforge-21.1.265/`。此前卡在下载阶段是**网络**，装配阶段还暴露过三处代码 bug（已修，见 `2f6d09d`）|
+| **分片写入页对齐（#5）** | ⚠️ **结构对 + 本机实下**：单测断言片起点与片长都是 4096 的倍数；96 MiB / `--piece-conns 7` 实下输出「8 片 · 片大小 14376960 字节」（= 3510×4096），成品与 `curl` 独立取回 **SHA1 一致**。真机 I/O 证据（改前 8 个写偏移里 7 个不对齐 → 改后 8/8 对齐）见 `quant-report-20261122.md` 的 E3 |
 
 > ⚠️ 这张表**区分「结构对」和「真的能跑」**。只有标「实测」的那条是人工确认过的；
 > 其余是文件级比对 —— **结构一致不等于能启动**。
