@@ -850,6 +850,21 @@ async fn one_split(
     Ok(())
 }
 
+/// 从 416 响应的 `Content-Range: bytes */N` 里取**远端当前长度**（RFC 9110 §14.4）。
+///
+/// 只认 `*` 形式：`bytes 0-99/1000` 那种是正常 206 的写法，不该出现在 416 里；
+/// 真出现了也说明服务器不规范，按"没给"处理（`None`），不要瞎猜。
+fn unsatisfied_total(h: &str) -> Option<u64> {
+    let (unit, rest) = h.trim().split_once(' ')?;
+    if !unit.eq_ignore_ascii_case("bytes") {
+        return None;
+    }
+    let (range, total) = rest.split_once('/')?;
+    if range.trim() != "*" {
+        return None;
+    }
+    total.trim().parse::<u64>().ok()
+}
 /// 开区间 `[start, end_excl)` → Range / `Content-Range` 用的闭区间 `(start, end_incl)`。
 ///
 /// **算一次、用两次**：请求头与 `Content-Range` 校验共用这一个换算。
@@ -1015,10 +1030,26 @@ async fn fetch_piece(
             // 416 = "这个区间我给不出来"，**恰恰说明它支持 Range**。
             // 常见成因是远端对象变小/被换掉了（我们的 `size` 比它大），
             // 所以别报成"不支持 Range"——那句话会把排查引到完全相反的方向。
+            //
+            // 而且 416 的 `Content-Range` 往往带 `bytes */N`（RFC 9110 §14.4）——
+            // N 就是**远端当前长度**。把它写进错误里，用户不用再自己去 HEAD 一次。
             pool.record_failure(idx);
+            let actual = resp
+                .headers()
+                .get(reqwest::header::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(unsatisfied_total);
+            let tail = match actual {
+                Some(n) => format!("远端当前 {n} 字节"),
+                None => "服务器没在 Content-Range 里给当前长度".to_string(),
+            };
+            let expect = match expect_total {
+                Some(e) => format!("，我们按 {e} 字节在切"),
+                None => String::new(),
+            };
             anyhow::bail!(
-                "服务器回 416（区间不可满足）：远端文件可能已变小或被替换 \
-                 （请求 bytes={req_start}-{req_end_incl}）: {url}"
+                "服务器回 416（区间不可满足）：{tail}{expect}；\
+                 本次请求 bytes={req_start}-{req_end_incl}（远端可能变小或被替换）: {url}"
             );
         }
         pool.record_failure(idx);
@@ -1195,6 +1226,23 @@ mod tests {
         assert!(client(&ok).is_ok());
     }
 
+    /// 416 的 `Content-Range: bytes */N` —— 只认 `*` 形式，其它一律当"没给"。
+    #[test]
+    fn unsatisfied_total_only_accepts_the_star_form() {
+        assert_eq!(unsatisfied_total("bytes */1000"), Some(1000));
+        assert_eq!(
+            unsatisfied_total("  BYTES */0 "),
+            Some(0),
+            "大小写与空白都不敏感"
+        );
+        // 正常 206 的写法不该出现在 416 里；真出现也不该被当成"当前长度"
+        assert_eq!(unsatisfied_total("bytes 0-99/1000"), None);
+        // 不规范的输入：宁可当没给，也不要瞎猜
+        assert_eq!(unsatisfied_total("bytes */"), None);
+        assert_eq!(unsatisfied_total("bytes */abc"), None);
+        assert_eq!(unsatisfied_total("items */5"), None);
+        assert_eq!(unsatisfied_total(""), None);
+    }
     #[test]
     fn byte_range_converts_exclusive_end_to_inclusive() {
         assert_eq!(byte_range(100, 200), (100, 199));
