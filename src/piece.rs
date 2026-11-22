@@ -15,6 +15,26 @@ const MAX_PIECE: u64 = 16 * 1024 * 1024; // 16 MB
 /// 默认并发数（与 `download::DEFAULT_PIECE_CONNS` 同值；此处独立定义，
 /// 免得 piece.rs 反向依赖 download.rs）
 const DEFAULT_CONNS: usize = 4;
+/// 页大小：片边界对齐到它。
+///
+/// **只值三件可测的小事**：
+/// ① 相邻两片不再共享同一个页缓存页（少一次页锁串行）；
+/// ② 片首尾不会产生「不足整扇区」的下发（`Split IO/Sec` 能看到差异）；
+/// ③ 为将来可能的直写（`O_DIRECT` / `FILE_FLAG_NO_BUFFERING`，都要求偏移与
+///    长度按页对齐）留出前提。
+///
+/// **不宣称的东西**：这不等于「HDD 友好」。机械盘的对齐旋钮在**磁道 / 大 extent**
+/// 量级（Track-Aligned Extents, FAST '02），4 KiB 远小于那个粒度；而乱序写的
+/// 代价由**写顺序**决定，不由页对齐决定（乱序写的立项另见 decision note）。
+pub const PAGE: u64 = 4096;
+
+/// 向下取整到页边界。
+///
+/// 只对**已经很正常**的输入用：`MIN_PIECE` 是页的整数倍，所以 `x >= MIN_PIECE`
+/// 时结果仍 `>= MIN_PIECE`；小于一页的值（只可能来自"不分片"分支）不走这里。
+fn floor_to_page(x: u64) -> u64 {
+    x & !(PAGE - 1)
+}
 
 #[derive(Debug, Clone)]
 pub struct PieceTable {
@@ -42,11 +62,16 @@ impl PieceTable {
     /// 片太小则每片的握手开销占比过高，片太大则并发用不满。
     pub fn with_conns(file_size: u64, conns: usize) -> Self {
         let piece_size = if file_size < NO_SPLIT_BELOW {
-            // 不分片：一片覆盖整个文件
+            // 不分片：一片覆盖整个文件（起点 0，本身在页边界上）
             file_size.max(1)
         } else {
             let target = conns.max(1) as u64;
-            (file_size / target).clamp(MIN_PIECE, MAX_PIECE)
+            // 夹逼之后**向下取整到页**。为什么是向下：
+            //   片变小只会让片数变多，「片数 ≥ conns」这个契约只会更稳；
+            //   向上取整会把片数压下去，正好与契约相反。
+            // 为什么取整不会越界：MIN_PIECE / MAX_PIECE 本身就是页的整数倍
+            //   （1 MiB = 256 页、16 MiB = 4096 页），所以 floor 之后仍落在区间内。
+            floor_to_page((file_size / target).clamp(MIN_PIECE, MAX_PIECE))
         };
 
         let total = file_size.div_ceil(piece_size).max(1) as u32;
@@ -145,7 +170,17 @@ impl PieceTable {
 
     /// 用已保存的位图重建；长度与当前分片数不符则 `None`
     pub fn restore(file_size: u64, bitmap: Vec<u64>) -> Option<Self> {
-        let mut t = Self::new(file_size);
+        Self::restore_with_conns(file_size, DEFAULT_CONNS, bitmap)
+    }
+
+    /// 同上，但按**调用方实际用的并发数**重建切片 —— 片大小是 `size / conns`
+    /// 的函数，conns 不同则片边界不同，位图的含义也随之不同。
+    ///
+    /// 之前这里只有 `DEFAULT_CONNS = 4` 的版本，而 `download::one_split` 用的是
+    /// `with_conns(size, opts.piece_conns)`：`--piece-conns` 一旦不是 4，
+    /// 续传就会把**自己的**状态判成过期，从头重下（静默失效，不报错）。
+    pub fn restore_with_conns(file_size: u64, conns: usize, bitmap: Vec<u64>) -> Option<Self> {
+        let mut t = Self::with_conns(file_size, conns);
         if bitmap.len() != t.bitmap.len() {
             return None;
         }
@@ -175,7 +210,15 @@ impl PieceState {
     }
 
     /// 读回位图。缺失 / 头部不匹配 / 长度不足，一律 `None`（调用方按从头下处理）。
+    ///
+    /// ⚠️ 这条只按 `DEFAULT_CONNS` 重建切片；**下载路径请用 [`Self::load_with_conns`]**，
+    /// 否则 `--piece-conns` 不是 4 时会把有效状态判成过期。
     pub fn load(part: &Path, expect_file_size: u64) -> Option<PieceTable> {
+        Self::load_with_conns(part, expect_file_size, DEFAULT_CONNS)
+    }
+
+    /// 同上，但按调用方**实际使用的并发数**重建切片后逐项对照。
+    pub fn load_with_conns(part: &Path, expect_file_size: u64, conns: usize) -> Option<PieceTable> {
         let raw = std::fs::read(Self::path_for(part)).ok()?;
         if raw.len() < STATE_HEADER || &raw[..8] != STATE_MAGIC {
             return None;
@@ -185,8 +228,9 @@ impl PieceState {
         let total = u32::from_le_bytes(raw[24..28].try_into().ok()?);
         let words = u32::from_le_bytes(raw[28..32].try_into().ok()?) as usize;
 
-        // 与按当前文件大小重新推导的结果逐项对照：任一不符都说明状态过期
-        let probe = PieceTable::new(expect_file_size);
+        // 与按当前文件大小 + 当前并发数重新推导的结果逐项对照：任一不符都说明状态过期。
+        // 片边界一致 ⇒ 位图含义一致；边界变了（公式改了 / conns 变了）⇒ 宁可重下。
+        let probe = PieceTable::with_conns(expect_file_size, conns);
         if file_size != expect_file_size
             || piece_size != probe.piece_size()
             || total != probe.total()
@@ -200,7 +244,7 @@ impl PieceState {
             let b = STATE_HEADER + i * 8;
             bitmap.push(u64::from_le_bytes(raw[b..b + 8].try_into().ok()?));
         }
-        PieceTable::restore(expect_file_size, bitmap)
+        PieceTable::restore_with_conns(expect_file_size, conns, bitmap)
     }
 
     /// 先写 `.tmp` 再改名：崩溃时不会留下半截状态被误读成有效进度
@@ -325,6 +369,108 @@ mod tests {
         let _ = std::fs::remove_file(&p);
         PieceState::remove(&p);
         p
+    }
+
+    #[test]
+    fn piece_size_is_page_aligned() {
+        // 片大小 = floor(clamp(size/conns, 1MiB, 16MiB))，再取整到 PAGE。
+        // 只有**除不尽**的组合才真正测到取整（能整除时取整是恒等）。
+        for (size_mb, conns) in [
+            (9u64, 3usize),
+            (16, 3),
+            (97, 7),
+            (100, 3),
+            (256, 5),
+            (1024, 3),
+        ] {
+            let size = size_mb * 1024 * 1024;
+            let t = PieceTable::with_conns(size, conns);
+            assert_eq!(
+                t.piece_size() % PAGE,
+                0,
+                "{size_mb} MiB / {conns} 连接 ⇒ 片大小 {} 不是 {PAGE} 的倍数",
+                t.piece_size()
+            );
+        }
+    }
+
+    #[test]
+    fn every_piece_starts_on_page_boundary() {
+        // 片起点就是写偏移（download.rs 按 `pj.start` seek 后整片写出），
+        // 所以这条等价于「每片写入的起点都在页边界上」。
+        for (size_mb, conns) in [(9u64, 3usize), (97, 7), (100, 3), (256, 5)] {
+            let size = size_mb * 1024 * 1024;
+            let t = PieceTable::with_conns(size, conns);
+            for i in 0..t.total() {
+                let (s, e) = t.range(i).unwrap();
+                assert_eq!(s % PAGE, 0, "片 {i} 起点 {s} 不在页边界");
+                // 末片止于 EOF，长度天然可以不是整页；其余片都应当是整页
+                if i + 1 < t.total() {
+                    assert_eq!((e - s) % PAGE, 0, "片 {i} 长度 {} 不是整页", e - s);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn floor_to_page_rounds_down_and_keeps_the_floor() {
+        assert_eq!(floor_to_page(PAGE - 1), 0);
+        assert_eq!(floor_to_page(PAGE), PAGE);
+        assert_eq!(floor_to_page(PAGE + 1), PAGE);
+        // 除不尽的典型值：10 MiB / 3
+        let raw = 10 * 1024 * 1024 / 3;
+        let f = floor_to_page(raw);
+        assert!(f <= raw && raw - f < PAGE);
+        assert_eq!(f % PAGE, 0);
+        // MIN_PIECE 本身就是页的整数倍 ⇒ 取整不会把它压到区间下界以下
+        assert_eq!(floor_to_page(MIN_PIECE), MIN_PIECE);
+        assert_eq!(MIN_PIECE % PAGE, 0);
+        assert_eq!(MAX_PIECE % PAGE, 0);
+    }
+
+    #[test]
+    fn state_roundtrip_preserves_non_default_conns() {
+        // 回归：`--piece-conns 7` 写下的状态必须能被 load_with_conns(…, 7) 读回。
+        // 旧实现固定按 DEFAULT_CONNS=4 重建判据 ⇒ 这里会 None，续传静默失效、每次从头下。
+        let size = 100 * 1024 * 1024;
+        let part = tmp_part("conns");
+        let mut t = PieceTable::with_conns(size, 7);
+        t.mark_done(0);
+        t.mark_done(t.total() - 1);
+        PieceState::save(&part, &t).expect("save 应当成功");
+
+        let back = PieceState::load_with_conns(&part, size, 7).expect("按 7 连应当读回");
+        assert_eq!(back.total(), t.total());
+        assert_eq!(back.piece_size(), t.piece_size());
+        assert!(back.is_done(0));
+        assert!(back.is_done(t.total() - 1));
+
+        // 用错的 conns 去读 ⇒ 片边界不同 ⇒ 必须判过期（宁重下，不拼坏文件）
+        assert!(PieceState::load_with_conns(&part, size, 4).is_none());
+        PieceState::remove(&part);
+    }
+
+    #[test]
+    fn state_with_unaligned_piece_size_is_rejected() {
+        // 手写一个「页对齐之前」的状态：piece_size 不是 PAGE 的倍数。
+        // 公式改过之后这种状态会出现在用户磁盘上 —— 必须被拒，而不是当成有效进度去拼文件。
+        let size = 100 * 1024 * 1024;
+        let part = tmp_part("unaligned");
+        let old_piece = size / 3; // 34_952_533：旧公式的输出，故意不是整页
+        assert_ne!(old_piece % PAGE, 0);
+        let total = size.div_ceil(old_piece) as u32;
+        let mut buf = Vec::new();
+        buf.extend_from_slice(STATE_MAGIC);
+        buf.extend_from_slice(&size.to_le_bytes());
+        buf.extend_from_slice(&old_piece.to_le_bytes());
+        buf.extend_from_slice(&total.to_le_bytes());
+        buf.extend_from_slice(&1u32.to_le_bytes());
+        buf.extend_from_slice(&u64::MAX.to_le_bytes());
+        std::fs::write(PieceState::path_for(&part), &buf).unwrap();
+
+        assert!(PieceState::load_with_conns(&part, size, 3).is_none());
+        assert!(PieceState::load(&part, size).is_none());
+        PieceState::remove(&part);
     }
 
     #[test]

@@ -367,7 +367,9 @@ async fn one_split(
     // 只有 `.part` 没有状态文件时无法知道哪些片段完整（稀疏文件的空洞读出来是 0），
     // 只能从头下 —— 宁可重下，不要拼出坏文件。
     if tmp.exists() {
-        match PieceState::load(&tmp, size) {
+        // 必须用**实际** piece_conns 重建判据：片大小是 size/conns 的函数，
+        // 用默认 4 去对照会让 `--piece-conns 8` 这类配置的续传永远失效（静默重下）。
+        match PieceState::load_with_conns(&tmp, size, opts.piece_conns) {
             Some(t) => {
                 if t.done_count() > 0 {
                     println!(
