@@ -74,9 +74,9 @@
 所以 E1 右尾的下降**不能全记在客户端分片策略头上**（见 §9 限制 5）。
 在 c≤16 区间，源端地板 ≥ 1710 MB/s 而客户端只有 564–683 MB/s ⇒ 这一段是**客户端流水线**的极限。
 
-![E1：吞吐 vs piece-conns（256 MiB，三轮中位）](scripts/quant/figures/fig1-throughput-vs-conns.png)
+![E1：吞吐 vs piece-conns（256 MiB，三轮中位）](../../scripts/quant/figures/fig1-throughput-vs-conns.png)
 
-![E1：写顺序跳变次数 H 随并发增长（H 的来源见 §1 口径）](scripts/quant/figures/fig3-hops-vs-conns.png)
+![E1：写顺序跳变次数 H 随并发增长（H 的来源见 §1 口径）](../../scripts/quant/figures/fig3-hops-vs-conns.png)
 
 ---
 
@@ -256,7 +256,7 @@ conns=1 时 P50 42.3 ms / P99 56.5 ms（P99/P50 = 1.34）；conns=16 时 P50 105
 **P99/P50 ≈ 1.3–1.5 ≪ 10** ⇒ 没有「少量分片长期拖后腿」的证据，issue #4 §三 提的「给慢分片单独放宽超时」
 在本轮数据里**缺乏必要性证据**。
 
-![T vs H：散点 + 固定 B=256 MiB 的拟合线（虚线）](scripts/quant/figures/fig2-T-vs-H.png)
+![T vs H：散点 + 固定 B=256 MiB 的拟合线（虚线）](../../scripts/quant/figures/fig2-T-vs-H.png)
 
 ---
 
