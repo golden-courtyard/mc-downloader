@@ -38,14 +38,14 @@
 ```bash
 cargo fmt --all                                     # ① 格式（pre-commit 门会拦）
 cargo clippy --all-targets --locked -- -D warnings   # ② lint（-D warnings = 警告即错）
-CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（lib 当前 138 条）
+CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（lib 当前 140 条）
 cargo build --release                               # ④ 产物：target/release/mc-downloader.exe
 ```
 
-**⚠️ 提交前必须跑完 ①②③**。这不是建议 —— **2026-10-25 曾因只跑「能编译 + 单测」而连续 5 次 CI 失败**：
+**注意：提交前必须跑完 ①②③**。这不是建议 —— **2026-10-25 曾因只跑「能编译 + 单测」而连续 5 次 CI 失败**：
 CI 查的是 fmt / clippy / test 三样，而我只验了后两样的一半。
 
-**⚠️ ③ 为什么带 `CARGO_INCREMENTAL=0`**（2026-10-28 两次独立交付各踩一次）：
+**注意：③ 为什么带 `CARGO_INCREMENTAL=0`**（2026-10-28 两次独立交付各踩一次）：
 
 沙箱里的 shell 会在 `target/debug/incremental/mc_downloader-*/` 下留下**删不动也 rename 不动**的文件；
 cargo 下一轮往里写 `dep-graph.part.bin` 时被拒 ⇒ `exit 101` + `error: could not compile ... os error 5`。
@@ -125,7 +125,7 @@ src/
 
 ---
 
-## 五、六个必须知道的坑（全部有实测记录）
+## 五、七个必须知道的坑（全部有实测记录）
 
 | 坑 | 判据 / 症状 |
 |---|---|
@@ -135,6 +135,7 @@ src/
 | **`SourcePool` 不是"主源挂了才换"** | 它按 EWMA 实测吞吐**一开始就分配**。改选源逻辑前先读 `source.rs` 的注释 |
 | **只有 `.part` 没有 `.part.state` 时必须从头下** | 稀疏文件的空洞读出来是 0，**宁可重下不拼坏文件** |
 | **续传判据必须用同一个 `piece_conns`** | 片大小是 `size / conns` 的函数：`PieceState::load` 曾固定按 conns=4 重建判据，于是 `--piece-conns 8` 的续传永远判过期、**静默从头重下**（不报错）。现在走 `load_with_conns(part, size, opts.piece_conns)`（2026-11-22 修，#5） |
+| **服务器对 Range 回 200 不是错误，是要降级** | 200 的 body 就是整份 ⇒ 该退回 `one_stream`，不要 `bail` 掉整批。`fetch_piece` 吐 `RangeUnsupported` 标记，`one_split` 收到后先 abort 余下 worker、再截断 `.part` 重下（残留竞态写在类型注释里）。416 / 5xx 仍然照常失败（2026-11-22，#6） |
 
 ---
 
@@ -158,4 +159,6 @@ src/
 
 - **提交信息**：中文，`type(scope): 一句话`，body 写「为什么」而不是「改了什么」。
 - **别一次提交混两件不相关的事**。
+- **文档不用 emoji**：`✅ / ❌ / ⚠ / ⏸ / ⭐` 一律写文字（完成 / 未做 / 注意 / 暂停 / 重点）。
+  箭头 `→ ⇒ ←`、圈码 `①②③`、`★` **不算** emoji，表格靠它们读，可以留。
 - **改完代码要更新 README 的「验证状态」表**（那张表区分「结构对」和「真的能跑」，**不许含糊**）。
