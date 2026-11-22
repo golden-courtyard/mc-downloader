@@ -15,13 +15,13 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
-      # 网络故障用例要有一条**真的会变坏**的链路：toxiproxy 提供 API（8474），
-      # 用例自己建 proxy、注毒、跑完删掉。本地没装时用例会 skip，CI 里要求必须跑。
-      services:
-        toxiproxy:
-          image: ghcr.io/shopify/toxiproxy:2.11.0
-          ports:
-            - 8474:8474
+    # 网络故障用例要有一条**真的会变坏**的链路：toxiproxy 提供 API（8474），
+    # 用例自己建 proxy、注毒、跑完删掉。本地没装时用例会 skip，CI 里要求必须跑。
+    services:
+      toxiproxy:
+        image: ghcr.io/shopify/toxiproxy:2.11.0
+        ports:
+          - 8474:8474
     steps:
       - uses: actions/checkout@v7
 

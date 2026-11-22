@@ -37,6 +37,16 @@ git push origin v0.6.0
 
 标签名与 `Cargo.toml` 的版本号**必须一致** —— 不一致的发布物无法追溯是哪个提交编出来的。
 
+### 改工作流之前先本地解析
+
+```bash
+python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"
+```
+
+GitHub 的报错只有一句 "This run likely failed because of a workflow file issue"，不指行；
+而 YAML 缩进错一级（例如把 `services:` 写成 6 空格而 job 的键是 4 空格）本地一解析就能看见。
+2026-11-23 因为这一条连推两次红。
+
 ## 4 推送后真的看 CI
 
 ```bash
