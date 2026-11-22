@@ -1,14 +1,34 @@
 # mc-downloader
 
-> 从 Mojang 官方 CDN 下载 Minecraft 文件，或安装 Modrinth 格式整合包。
-> 下载结果直接是标准 `.minecraft` 目录结构，可被 PCL / 官方启动器 / HMCL 识别。
+> 把 Minecraft 相关文件放到正确位置：下载结果就是标准 `.minecraft` 目录结构，可被 PCL / 官方启动器 / HMCL 识别。
+> **下载源由你自己提供**（本工具不内置任何源，见下）。
+
+> 如果这个方向对你有用，可以 [请我喝杯奶茶](https://afdian.com/a/liumiaoqi)。
 
 > 注意：**使用前请读**：[免责声明与法律定位](#免责声明与法律定位)（文末）。
-> **一句话**：只从官方源下载**公开文件**；不包含、不分发任何游戏内容；不提供破解或账号绕过。
+> **一句话**：只把你给的地址上的**公开文件**搬到你指定的目录；不包含、不分发任何游戏内容；不提供破解或账号绕过。
 
 ---
 
 ## 五分钟上手
+
+### 0. 先配下载源（vanilla / run / pack 必需）
+
+**本工具不内置任何下载源** —— 官方或第三方都不内置（理由见 [为什么源要你自己配](#为什么源要你自己配)）。
+先在配置文件里填六项：
+
+```toml
+[source]
+metadata    = "https://<你的源>/version_manifest_v2.json"
+assets      = "https://<你的源>"
+fabric      = "https://<你的源>"
+forge_meta  = "https://<你的源>"
+forge_maven = "https://<你的源>"
+neoforge    = "https://<你的源>"
+```
+
+配置文件放哪：`--config <路径>`，或平台配置目录（`mc-downloader --print-config` 会告诉你它读的是哪个）。
+**`fetch <url>` 不需要源** —— 你给地址，它只做传输。
 
 ### 1. 下一个文件（最常用）
 
@@ -77,7 +97,7 @@ mc-downloader pack "xxx.mrpack" -d "D:/Games/.minecraft"
 
 **不做启动器**——启动、模组管理、存档、账号，交给 PCL 这类启动器。
 
-### 验证状态（2026-10-23）
+### 验证状态（2026-11-23）
 
 | 项 | 状态 |
 |---|---|
@@ -86,7 +106,10 @@ mc-downloader pack "xxx.mrpack" -d "D:/Games/.minecraft"
 | **1.20.1 + Fabric 0.19.5 → 实际启动** | 完成：**用户用 PCL 实测，可进入游戏** |
 | CurseForge 整合包 188 个 mod 对账 | 完成：三个包全都对得上（`mods/` + `manual.txt` = manifest 条数）|
 | **NeoForge 21.1.265（MC 1.21.1）** | **真机通过（2026-10-27）** —— `EXIT=0`·210s·`mainClass = cpw.mods.bootstraplauncher.BootstrapLauncher`·产物 `versions/neoforge-21.1.265/`。此前卡在下载阶段是**网络**，装配阶段还暴露过三处代码 bug（已修，见 `2f6d09d`）|
-| **分片写入页对齐（#5）** | 注意：**结构对 + 本机实下**：单测断言片起点与片长都是 4096 的倍数；96 MiB / `--piece-conns 7` 实下输出「8 片 · 片大小 14376960 字节」（= 3510×4096），成品与 `curl` 独立取回 **SHA1 一致**。真机 I/O 证据（改前 8 个写偏移里 7 个不对齐 → 改后 8/8 对齐）见 `docs/reports/quant-report-20261122.md` 的 E3 |
+| **源码层：不内置任何下载源（#15）** | 完成（2026-11-23）：`src/` 里 11 处硬编码源全部删除，改为 `[source]` 六项**全必填**；CI 加 `grep` 闸门（实测零命中）；`vanilla` 未配源时打印「填哪个文件、缺哪个键、只想下单个文件就用 `fetch`」 |
+| **落地名认 `Content-Disposition`（#16）** | 完成（2026-11-23）：优先级 `--name` > CD > URL 末段 > `out.bin`；服务器给的名字同样过 `pathsafe`（`filename="../../evil.bin"` 实测回落且目录外无文件） |
+| **远端对象中途被换（#7）** | 完成（2026-11-23）：416 报「远端当前 N 字节，我们按 M 字节在切」；`--if-range` 打开时条件失配 ⇒ 当场降级单流重下（32 MiB 实测 sha1 一致） |
+| **协议层五项（#10）** | 完成（2026-11-23）：未经请求的压缩 ⇒ 拒绝且未落盘；`--require-sha1`；302 换对象无跨对象拼接；slowloris 实测曾挂 7 分钟 ⇒ 新增停滞检测后 10.0 s 内失败，4 MiB 正常下载无误杀 || **分片写入页对齐（#5）** | 注意：**结构对 + 本机实下**：单测断言片起点与片长都是 4096 的倍数；96 MiB / `--piece-conns 7` 实下输出「8 片 · 片大小 14376960 字节」（= 3510×4096），成品与 `curl` 独立取回 **SHA1 一致**。真机 I/O 证据（改前 8 个写偏移里 7 个不对齐 → 改后 8/8 对齐）见 `docs/reports/quant-report-20261122.md` 的 E3 |
 
 > 注意：这张表**区分「结构对」和「真的能跑」**。只有标「实测」的那条是人工确认过的；
 > 其余是文件级比对 —— **结构一致不等于能启动**。
@@ -94,6 +117,17 @@ mc-downloader pack "xxx.mrpack" -d "D:/Games/.minecraft"
 ---
 
 ## 用法
+### 几个值得先知道的参数
+
+| 参数 | 作用 |
+|---|---|
+| `--print-config` | 打印**生效值**和它来自哪一层（CLI / 配置文件 / 默认），排查"我改了怎么没用" |
+| `--config <路径>` | 指定配置文件；不给则按平台配置目录找（`--print-config` 会告诉你读的是哪个） |
+| `--conns` / `--jobs` | `--piece-conns` / `--concurrency` 的别名 |
+| `--if-range` | 分片带 `If-Range`：远端中途被换时**当场降级重下**（默认关，见 `docs/usage.md`） |
+| `--require-sha1` | 没有校验和的文件**拒绝下载**（默认关） |
+| `--no-content-disposition` | 不读服务器给的文件名，严格按 URL 决定落点 |
+| `--no-motw` | 不给 `.exe`/`.dll` 打 Mark-of-the-Web（Windows；默认会打） |
 
 > **用于下载你有权下载的文件。** 本工具不判断使用者是否持有相应授权，这一点由使用者自行负责。
 
@@ -226,6 +260,20 @@ cargo build --release        # 产物: target/release/mc-downloader.exe（需 Ru
 
 ---
 
+## 为什么源要你自己配
+
+本工具**不内置任何下载源** —— 官方地址、第三方镜像都不内置，也没有"试试这几个"的探测。
+
+理由是 2026-10-20 那天：PCL2 在 v2.99.0.0 移除了 MC 下载功能，更新日志原文写的是
+「为遵守相关法律法规」。原因不是被举报，而是「第三方工具内置下载功能客观上存在绕过官方正版验证的可能」。
+我们和它相邻 —— 与其等别人来指出，不如把这条通道交还给你：
+
+- 你要下什么、从哪下，由**你**决定并承担；
+- 本工具只负责"把文件放对位置、可续传、可校验、可脚本化"；
+- 换镜像 = 改配置，不用等我们发版。
+
+判据不是口头承诺：`src/` 里出现任何源地址，CI 会直接红（`grep` 闸门）。
+`docs/usage.md` 的「源：必须先自己配」写了六个键各填什么。
 ## 为什么不用启动器的下载功能
 
 > **"把文件放到正确的位置"这一件事**，做成一个可脚本化、可复现、可审计的命令。
@@ -240,9 +288,11 @@ cargo build --release        # 产物: target/release/mc-downloader.exe（需 Ru
 
 它只做三件事：
 
-1. 从 **Mojang 官方 CDN**（`<你的源>` / `<你的源>`）下载**公开可访问**的文件；
-2. 从 **Fabric 官方 meta**（`<你的源>`）拉取 profile 与库；
-3. 从整合包 manifest 里列出的**作者公开提供的 URL** 下载模组（逐文件 SHA1 校验）。
+1. 从**你在 `[source]` 里配置的地址**下载 Minecraft 的**公开可访问**文件（原版清单、assets、加载器 profile/库）；
+2. 从整合包 manifest 里列出的**作者公开提供的 URL** 下载模组（逐文件 SHA1 校验）；
+3. 把上述文件按标准 `.minecraft` 目录结构落盘。
+
+**它不自带任何下载地址**：填哪个元数据/资源/加载器源由你决定，工具只负责传输与装配。
 
 **它不做的**：
 
@@ -284,3 +334,14 @@ cargo build --release        # 产物: target/release/mc-downloader.exe（需 Ru
 ## License
 
 MIT，见 [LICENSE](LICENSE)。
+
+---
+
+## 工具链
+
+代码、测试与文档在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 上以 AI 协作方式完成；
+决策理由记在 `.agents/notes/`，实验数据记在 `docs/reports/`。
+
+[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
+
+如果这个方向对你有用，可以 [请我喝杯奶茶](https://afdian.com/a/liumiaoqi)。

@@ -38,7 +38,7 @@
 ```bash
 cargo fmt --all                                     # ① 格式（pre-commit 门会拦）
 cargo clippy --all-targets --locked -- -D warnings   # ② lint（-D warnings = 警告即错）
-CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（lib 当前 164 条）
+CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（lib 当前 186 条）
 cargo build --release                               # ④ 产物：target/release/mc-downloader.exe
 ```
 
@@ -57,7 +57,7 @@ cargo 下一轮往里写 `dep-graph.part.bin` 时被拒 ⇒ `exit 101` + `error:
 
 ### 测试策略：两类，分工不同
 
-**现有 164 条 lib 单元测试 + 37 条集成测试（19 参数化 + 5 属性 + 8 HTTP 语义 + 5 Linux 语义），只覆盖「能想到的失败」。** 真实网络行为（丢包、RST、半关闭、
+**现有 186 条 lib 单元测试 + 40 条集成测试（19 参数化 + 5 属性 + 8 HTTP 语义 + 5 Linux 语义 + 3 个回归文件），只覆盖「能想到的失败」。** 真实网络行为（丢包、RST、半关闭、
 `Content-Length` 与实际不符）靠 **Kali 做中间人/服务端**、宿主侧配合测出来，
 记录在 `docs/reports/net_faults-report-*.md`。
 
@@ -160,6 +160,6 @@ src/
 
 - **提交信息**：中文，`type(scope): 一句话`，body 写「为什么」而不是「改了什么」。
 - **别一次提交混两件不相关的事**。
-- **文档不用 emoji**：任何 emoji 区段的字符都不写（不止 `✅ / ❌ / ⚠ / ⏸ / ⭐`，`📄` 这类图形符号同样算），
-  一律写文字（完成 / 未做 / 注意 / 暂停 / 重点 / 支持 / 不认）。箭头 `→ ⇒ ←`、圈码 `①②③`、`★` **不算** emoji，表格靠它们读，可以留。
+- **文档不用 emoji**：任何 emoji 区段的字符都不写（勾叉、警告、暂停、星、文档图形符号等一律算），
+  一律写文字（完成 / 未做 / 注意 / 暂停 / 重点 / 支持 / 不认）。箭头 → ⇒ ← 、圈码 ①②③ 、★ **不算** emoji，表格靠它们读，可以留。
 - **改完代码要更新 README 的「验证状态」表**（那张表区分「结构对」和「真的能跑」，**不许含糊**）。

@@ -1,6 +1,6 @@
 [package]
 name = "mc-downloader"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 description = "从 Mojang 官方 CDN 下载 Minecraft，或安装 Modrinth 格式整合包"
 license = "MIT"
