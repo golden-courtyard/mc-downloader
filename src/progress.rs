@@ -134,6 +134,15 @@ impl Progress {
         self.done.load(Ordering::Relaxed)
     }
 
+    /// 把已计字节**拨回**某个值。
+    ///
+    /// 只有一个用途：分片路径降级成单流（服务器对 Range 回 200）时，本次分片尝试
+    /// 已计的字节要作废 —— 否则 `one_stream` 从 0 重下会把总数算超，进度条走到 120%。
+    /// 只影响展示与完成判定，不动令牌桶（限速按真实下发字节记账，重下本来就该再扣一次）。
+    pub fn reset_to(&self, v: u64) {
+        self.done.store(v, Ordering::Relaxed);
+    }
+
     /// 起一个每秒打印的后台任务；调用方结束时 abort 即可
     pub fn spawn_reporter(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let p = self.clone();
@@ -314,6 +323,22 @@ mod tests {
             p.line().is_none(),
             "done >= total 时不该再打印进度行（完成与否由调用方宣布）"
         );
+    }
+
+    /// 降级路径（回 200 → 单流）要把本次分片尝试的字节拨回去，
+    /// 否则单流重下会把进度算超（120% 那种）。
+    #[test]
+    fn reset_to_rewinds_the_counter() {
+        let p = Progress::new(1000);
+        p.add(900);
+        assert_eq!(p.done(), 900);
+        p.reset_to(400);
+        assert_eq!(p.done(), 400, "reset_to 之后 done 必须是它给的值");
+        p.reset_to(0);
+        assert_eq!(p.done(), 0);
+        // 拨回到 0 之后还能继续累加（不是"冻结"）
+        p.add(10);
+        assert_eq!(p.done(), 10);
     }
 
     #[test]

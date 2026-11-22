@@ -362,6 +362,8 @@ async fn one_split(
     opts: &DownloadOpts,
     pg: &Arc<Progress>,
 ) -> Result<()> {
+    // 降级（服务器回 200 → 退回单流）时要把进度拨回这个值：那次分片尝试的字节不算数。
+    let done_before = pg.done();
     let mut table = PieceTable::with_conns(size, opts.piece_conns);
     if !table.is_split() {
         return one_stream(client, job, dst, pg).await;
@@ -502,12 +504,18 @@ async fn one_split(
                 let mut attempt = 0u32;
                 let mut fatal: Option<anyhow::Error> = None;
                 loop {
-                    match fetch_piece(&c, &pj, &t, &pg, &pool, &mut tried).await {
+                    match fetch_piece(&c, &pj, &t, size, &pg, &pool, &mut tried).await {
                         Ok(()) => {
                             tbl.lock().await.mark_done(pj.piece_idx);
                             break;
                         }
                         Err(e) => {
+                            // 服务器回 200（整份）：重试只会再撞一次，直接把标记抛上去让
+                            // `one_split` 降级成单流。
+                            if e.downcast_ref::<RangeUnsupported>().is_some() {
+                                fatal = Some(e);
+                                break;
+                            }
                             // 无源可用 = 不可恢复：退避只会原地再撞一次，别白等
                             if e.downcast_ref::<SourcesExhausted>().is_some() {
                                 fatal = Some(e.context(format!("分片 {} 无可用源", pj.piece_idx)));
@@ -645,9 +653,11 @@ async fn one_split(
         })
     };
 
-    // 逐个收 worker：出错也要先停掉 flusher，否则后台任务会一直写状态
+    // 逐个收 worker。用 `pop()` 而不是 `for`：出错时**余下的 handle 必须还在 Vec 里**，
+    // 否则 `break` 会把它们 drop 掉（JoinHandle 的 drop 是 detach，不是 abort），
+    // 那些 worker 会继续往 `.part` 里写 —— 而降级分支正要截断这个文件重下。
     let mut worker_err: Option<anyhow::Error> = None;
-    for h in handles {
+    while let Some(h) = handles.pop() {
         match h.await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
@@ -665,6 +675,20 @@ async fn one_split(
     }
     flusher.abort();
     if let Some(e) = worker_err {
+        // 降级：服务器对 Range 回 200（整份）⇒ 退回单流，而不是把整批判失败。
+        //
+        // 顺序不能换：先把还在跑的 worker 掐掉，再让 `one_stream` 去 `File::create`
+        // 截断 `.part`（它从头写）；否则晚到的分片写会把新流搅坏。
+        // 已计的字节要拨回去（本次下载从 0 重来），否则进度会超过总量。
+        if e.downcast_ref::<RangeUnsupported>().is_some() {
+            for h in &handles {
+                h.abort();
+            }
+            pg.reset_to(done_before);
+            PieceState::remove(&tmp);
+            println!("[*] 服务器对 Range 回 200（整份），已退回单流下载");
+            return one_stream(client, job, dst, pg).await;
+        }
         return Err(e);
     }
     // 收尾再落一次：此刻位图应是全 done，供下次直接跳过
@@ -708,7 +732,12 @@ fn byte_range(start: u64, end_excl: u64) -> (u64, u64) {
 /// 数据就会被写到错误偏移上：不报错、文件大小正确、只有 sha1 错，极难查。
 ///
 /// `end_incl` 是**闭区间**终点；调用方传 `pj.end - 1`（`PieceJob.end` 是开区间）。
-fn check_content_range(header: &str, start: u64, end_incl: u64) -> anyhow::Result<()> {
+fn check_content_range(
+    header: &str,
+    start: u64,
+    end_incl: u64,
+    expect_total: Option<u64>,
+) -> anyhow::Result<()> {
     let raw = header.trim();
     // 单位大小写不敏感（ABNF 字面量如此，`BYTES` 也合法）。
     // `bytes=100-199/1000` 没有空白 ⇒ unit 变成整串 ⇒ 不等于 bytes ⇒ 照样报错。
@@ -733,20 +762,32 @@ fn check_content_range(header: &str, start: u64, end_incl: u64) -> anyhow::Resul
         .trim()
         .parse()
         .with_context(|| format!("Content-Range 终点解析失败: {raw}"))?;
-    // 总长：**只校验格式，不比对实际文件大小**（比对交给全文件 sha1 —— 这里拿不到
-    // 权威的 file_size 语义，也不该为它改签名）。`*` 表示未知 ⇒ 跳过格式校验。
-    let total = total.trim();
-    if total != "*" {
-        let _: u64 = total
-            .parse()
-            .with_context(|| format!("Content-Range 总长解析失败: {raw}"))?;
-    }
+    // 总长：格式总是校验；**给了 `expect_total` 才比对**。
+    // 之前这里只校验格式（理由是"拿不到权威 file_size、也不该为它改签名"）——
+    // 现在调用方（`one_split`）手里真有权威 `size`，所以把比对补上：
+    // 远端对象在下载过程中被换掉时，`total` 会变，这一条能直接报「大小变了」，
+    // 而不是等到最后全文件 SHA1 失败时让用户去猜"是我算错了还是源站换了文件"。
+    let total_raw = total.trim();
+    let parsed_total = if total_raw == "*" {
+        None // `*` 未知 ⇒ 跳过比对
+    } else {
+        Some(
+            total_raw
+                .parse::<u64>()
+                .with_context(|| format!("Content-Range 总长解析失败: {raw}"))?,
+        )
+    };
 
     if got_start != start || got_end != end_incl {
         bail!(
             "Content-Range 与请求的分片不符: 服务器回 {got_start}-{got_end}，\
              请求 {start}-{end_incl}，原始 header: {raw}"
         );
+    }
+    if let (Some(got), Some(expect)) = (parsed_total, expect_total)
+        && got != expect
+    {
+        bail!("远端文件大小变了: Content-Range 总长 {got}，期望 {expect}（原始 header: {raw}）");
     }
     Ok(())
 }
@@ -765,11 +806,38 @@ impl std::fmt::Display for SourcesExhausted {
 
 impl std::error::Error for SourcesExhausted {}
 
-/// 拉一个分片并写到指定偏移
+/// 服务器对 `Range` 请求回了 **200 整份**（而不是 206）。
+///
+/// 这是**可降级**的错误：`one_split` 抓到它就退回 `one_stream` —— 200 的 body 本来就是整份，
+/// 单流照样能下完。别的非 206 状态码仍然照常 `record_failure` + 报错。
+///
+/// 用类型而不是文案当标记：文案会改，类型不会（同 `SourcesExhausted`）。
+///
+/// ⚠️ 已知边界：退回前会 abort 掉其余 worker，但**已经在 `spawn_blocking` 里落盘的那一次写
+/// 停不下来**。真实触发场景（服务器一律回 200）里一片都写不出去（每片都在 `send()` 拿到状态码后
+/// 就退出），所以这条竞态只在"同一个源时而 206 时而 200"的畸形服务器上才可能露出；
+/// 代价写成注释留在这里，而不是假装它不存在。
+#[derive(Debug)]
+struct RangeUnsupported {
+    url: String,
+}
+
+impl std::fmt::Display for RangeUnsupported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "服务器对 Range 回 200（整份），无法分片: {}", self.url)
+    }
+}
+
+impl std::error::Error for RangeUnsupported {}
+
+/// 拉一个分片并写到指定偏移。
+///
+/// `size` 是整文件的权威总长：用来比对 `Content-Range` 的总长，抓"远端对象中途被换掉"。
 async fn fetch_piece(
     client: &reqwest::Client,
     pj: &PieceJob,
     path: &Path,
+    size: u64,
     pg: &Arc<Progress>,
     pool: &Arc<SourcePool>,
     tried: &mut Vec<usize>,
@@ -801,12 +869,15 @@ async fn fetch_piece(
         .await?;
 
     if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        let status = resp.status();
+        if status == reqwest::StatusCode::OK {
+            // 200 = 服务器把整份发过来了。**这不是错误，是可降级**：`one_split` 抓到
+            // 这个标记就退回 `one_stream`（200 的 body 本来就是整份）。
+            // 刻意**不** record_failure：源没问题，只是不支持分片。
+            return Err(anyhow::Error::new(RangeUnsupported { url }));
+        }
         pool.record_failure(idx);
-        anyhow::bail!(
-            "服务器不支持 Range（HTTP {}），无法分片: {}",
-            resp.status(),
-            url
-        );
+        anyhow::bail!("服务器不支持 Range（HTTP {status}），无法分片: {url}");
     }
 
     // 206 + 长度对上还不够：区间起点错时长度照样对，数据会被写到错误偏移。
@@ -823,7 +894,7 @@ async fn fetch_piece(
         .to_str()
         .with_context(|| format!("Content-Range 不是合法 ASCII: {url}"))
         .inspect_err(|_| pool.record_failure(idx))?;
-    if let Err(e) = check_content_range(cr, req_start, req_end_incl) {
+    if let Err(e) = check_content_range(cr, req_start, req_end_incl, Some(size)) {
         pool.record_failure(idx);
         return Err(e)
             .with_context(|| format!("分片 {} 的 Content-Range 校验失败: {url}", pj.piece_idx));
@@ -903,12 +974,12 @@ mod tests {
 
     #[test]
     fn content_range_accepts_matching_range() {
-        assert!(check_content_range("bytes 100-199/1000", 100, 199).is_ok());
+        assert!(check_content_range("bytes 100-199/1000", 100, 199, None).is_ok());
     }
 
     #[test]
     fn content_range_rejects_wrong_start() {
-        let e = check_content_range("bytes 100-199/1000", 101, 199).unwrap_err();
+        let e = check_content_range("bytes 100-199/1000", 101, 199, None).unwrap_err();
         let msg = format!("{e:#}");
         assert!(msg.contains("100-199"), "错误里要有服务器回的区间: {msg}");
         assert!(msg.contains("101-199"), "错误里要有请求的区间: {msg}");
@@ -916,7 +987,7 @@ mod tests {
 
     #[test]
     fn content_range_rejects_wrong_end() {
-        let e = check_content_range("bytes 100-199/1000", 100, 198).unwrap_err();
+        let e = check_content_range("bytes 100-199/1000", 100, 198, None).unwrap_err();
         let msg = format!("{e:#}");
         assert!(msg.contains("100-199"), "错误里要有服务器回的区间: {msg}");
         assert!(msg.contains("100-198"), "错误里要有请求的区间: {msg}");
@@ -924,31 +995,53 @@ mod tests {
 
     #[test]
     fn content_range_accepts_unknown_total() {
-        assert!(check_content_range("bytes 100-199/*", 100, 199).is_ok());
+        assert!(check_content_range("bytes 100-199/*", 100, 199, None).is_ok());
+        // 即便调用方知道权威总长，`*` 也跳过比对：服务器说"我不知道"，不是矛盾
+        assert!(check_content_range("bytes 100-199/*", 100, 199, Some(1000)).is_ok());
     }
 
     #[test]
     fn content_range_rejects_bad_total() {
-        assert!(check_content_range("bytes 100-199/abc", 100, 199).is_err());
-        assert!(check_content_range("bytes 100-199/", 100, 199).is_err());
+        assert!(check_content_range("bytes 100-199/abc", 100, 199, None).is_err());
+        assert!(check_content_range("bytes 100-199/", 100, 199, None).is_err());
     }
 
     #[test]
     fn content_range_accepts_uppercase_unit() {
         // ABNF 字面量大小写不敏感，`BYTES` / `Bytes` 都是合法格式
-        assert!(check_content_range("BYTES 100-199/1000", 100, 199).is_ok());
-        assert!(check_content_range("Bytes 100-199/*", 100, 199).is_ok());
+        assert!(check_content_range("BYTES 100-199/1000", 100, 199, None).is_ok());
+        assert!(check_content_range("Bytes 100-199/*", 100, 199, None).is_ok());
     }
 
     #[test]
     fn content_range_rejects_equals_separator() {
         // `bytes=` 不是合法格式（RFC 7233 是 `bytes <s>-<e>/<total>`）
-        assert!(check_content_range("bytes=100-199/1000", 100, 199).is_err());
+        assert!(check_content_range("bytes=100-199/1000", 100, 199, None).is_err());
     }
 
     #[test]
     fn content_range_rejects_garbage_without_panic() {
-        assert!(check_content_range("garbage", 0, 0).is_err());
+        assert!(check_content_range("garbage", 0, 0, None).is_err());
+    }
+
+    #[test]
+    fn content_range_checks_total_against_expected_size() {
+        // 与调用方给的权威 size 一致 ⇒ 通过
+        assert!(check_content_range("bytes 100-199/1000", 100, 199, Some(1000)).is_ok());
+        // 不一致 ⇒ 精确报「大小变了」，而不是等到全文件 sha1 失败时让人猜是谁的错
+        let e = check_content_range("bytes 100-199/1001", 100, 199, Some(1000)).unwrap_err();
+        let msg = format!("{e:#}");
+        assert!(
+            msg.contains("远端文件大小变了"),
+            "要能看出是源站换了文件: {msg}"
+        );
+        assert!(
+            msg.contains("1001") && msg.contains("1000"),
+            "服务器总长与期望总长都要出现在错误里: {msg}"
+        );
+        // 区间已经错了时优先报区间（更具体），不要被总长那条抢先
+        let e = check_content_range("bytes 100-199/1001", 101, 199, Some(1000)).unwrap_err();
+        assert!(format!("{e:#}").contains("与请求的分片不符"));
     }
 
     #[test]
