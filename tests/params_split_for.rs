@@ -92,6 +92,7 @@ fn split_for_keeps_every_other_field() {
         timeout_secs: 5,
         continue_on_error: true,
         max_speed: Some(1024 * 1024),
+        motw: false,
     };
     let s = src.split_for(3);
 
@@ -103,6 +104,7 @@ fn split_for_keeps_every_other_field() {
     assert_eq!(s.timeout_secs, src.timeout_secs);
     assert_eq!(s.continue_on_error, src.continue_on_error);
     assert_eq!(s.max_speed, src.max_speed);
+    assert_eq!(s.motw, src.motw, "分任务并发时 MotW 开关也要原样带过去");
 }
 
 /// 单调性：任务越多，单任务分到的并发只会更少（不会反而变多）。

@@ -3,7 +3,7 @@ mod commands;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use mc_downloader::download::DownloadOpts;
-use mc_downloader::{config, progress};
+use mc_downloader::{config, progress, settings};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -44,8 +44,21 @@ struct Args {
     #[arg(long, global = true)]
     max_speed: Option<String>,
 
+    /// 用户级配置文件路径（默认查平台配置目录；用 --print-config 看它读的是哪个）
+    #[arg(long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    /// 打印最终生效的配置（含每一项来自哪一层），然后退出
+    #[arg(long, global = true)]
+    print_config: bool,
+
+    /// 不给可执行文件打 Mark-of-the-Web（默认会打，见 docs/usage.md）
+    #[arg(long = "no-motw", global = true)]
+    no_motw: bool,
+
+    /// 子命令（`--print-config` 时可以不写）
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -129,80 +142,93 @@ enum Cmd {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // CLI 显式给 > 内置默认（脚本模式下，`run` 分支再叠加配置文件的值）
+    // CLI 显式给 > 脚本（仅 run）> 用户配置 > 内置默认
     let dflt = DownloadOpts::default();
 
-    // 限速：CLI 的非法写法要在启动时立刻报错，不能静默当成"不限速"
-    let cli_max_speed = match args.max_speed.as_deref() {
-        Some(s) => Some(progress::parse_speed(s).ok_or_else(|| {
-            anyhow::anyhow!("--max-speed 解析失败：`{s}`（例：5M / 500K / 1048576）")
-        })?),
-        None => None,
+    // 用户级配置（持久默认值）。**不读 cwd**，搜索链见 `settings::locate`。
+    let loaded = settings::load(args.config.as_deref())?;
+
+    // 把 CLI 也表达成同一个 `Settings`，三层用同一套合并逻辑
+    let cli_layer = settings::Settings {
+        proxy: args.proxy.clone(),
+        retries: args.retry,
+        concurrency: args.concurrency,
+        piece_conns: args.piece_conns,
+        adaptive: args.adaptive,
+        timeout_secs: args.timeout,
+        max_speed: args.max_speed.clone(),
+        motw: args.no_motw.then_some(false),
     };
-    let cli = DownloadOpts {
-        proxy: args.proxy.clone().filter(|p| !p.trim().is_empty()),
-        retries: args.retry.unwrap_or(dflt.retries),
-        concurrency: args.concurrency.unwrap_or(dflt.concurrency),
-        piece_conns: args.piece_conns.unwrap_or(dflt.piece_conns),
-        adaptive: args.adaptive.unwrap_or(dflt.adaptive),
-        timeout_secs: args.timeout.unwrap_or(dflt.timeout_secs),
-        continue_on_error: false,
-        max_speed: cli_max_speed,
-    };
-    let net = cli.proxy.as_deref().unwrap_or("直连");
+    let merged = settings::merge(&[("cli", &cli_layer), ("config", &loaded.settings)], &dflt);
+    if args.print_config {
+        let src = match &loaded.source {
+            Some(p) => p.display().to_string(),
+            None => "（没有配置文件，全走默认）".to_string(),
+        };
+        println!("[*] 配置文件: {src}");
+        println!("{:<14} {:<24} 来源", "键", "生效值");
+        for (k, v, s) in &merged.rows {
+            println!("{k:<14} {v:<24} {s}");
+        }
+        return Ok(());
+    }
+
+    // 限速：非法写法要在启动时立刻报错，不能静默当成"不限速"（两层都要查）
+    for s in [
+        args.max_speed.as_deref(),
+        loaded.settings.max_speed.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        progress::parse_speed(s).ok_or_else(|| {
+            anyhow::anyhow!(
+                "--max-speed / 配置里的 max_speed 解析失败：`{s}`（例：5M / 500K / 1048576）"
+            )
+        })?;
+    }
+    let net = merged.opts.proxy.as_deref().unwrap_or("直连");
     // 给拆出去的子命令用：opts 是行为、net 是文案（同一个来源，分开存）
     let ctx = commands::Ctx {
-        opts: cli.clone(),
+        opts: merged.opts.clone(),
         net: net.to_string(),
     };
 
-    match args.cmd {
+    let Some(cmd) = args.cmd else {
+        anyhow::bail!(
+            "需要子命令（vanilla / run / fetch / probe / pack）；`--help` 看用法，`--print-config` 看配置"
+        );
+    };
+    match cmd {
         Cmd::Vanilla { version, dir } => {
             commands::vanilla::run(version, dir, &ctx).await?;
         }
         Cmd::Run { script, parallel } => {
             let cfg = config::Config::load(&script)?;
 
-            // 优先级：CLI 显式 > 配置文件 > 内置默认
-            let opts = DownloadOpts {
-                proxy: cli
-                    .proxy
-                    .clone()
-                    .or_else(|| cfg.proxy_filtered())
-                    .filter(|p| !p.trim().is_empty()),
-                retries: args.retry.or(cfg.network.retry).unwrap_or(dflt.retries),
-                concurrency: args
-                    .concurrency
-                    .or(cfg.download.concurrency)
-                    .unwrap_or(dflt.concurrency),
-                piece_conns: args
-                    .piece_conns
-                    .or(cfg.download.piece_conns)
-                    .unwrap_or(dflt.piece_conns),
-                adaptive: args
-                    .adaptive
-                    .or(cfg.download.adaptive)
-                    .unwrap_or(dflt.adaptive),
-                timeout_secs: args
-                    .timeout
-                    .or(cfg.network.timeout_secs)
-                    .unwrap_or(dflt.timeout_secs),
-                // 配置文件不暴露这个开关：它是 main.rs 按任务类型决定的
-                // （urls_file 批量任务在下面单点覆盖成 true）
-                continue_on_error: false,
-                // 优先级：CLI > 配置文件；两边都没有 = 不限速
-                max_speed: match cli.max_speed {
-                    Some(v) => Some(v),
-                    None => match cfg.download.max_speed.as_deref() {
-                        Some(s) => Some(progress::parse_speed(s).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "配置里的 download.max_speed 解析失败：`{s}`\n                                   写法：5M / 500K / 纯数字（字节/秒）"
-                            )
-                        })?),
-                        None => None,
-                    },
-                },
+            // 优先级：CLI 显式 > 脚本 > 用户配置 > 内置默认
+            let script_layer = settings::Settings {
+                proxy: cfg.proxy_filtered(),
+                retries: cfg.network.retry,
+                concurrency: cfg.download.concurrency,
+                piece_conns: cfg.download.piece_conns,
+                adaptive: cfg.download.adaptive,
+                timeout_secs: cfg.network.timeout_secs,
+                max_speed: cfg.download.max_speed.clone(),
+                motw: None,
             };
+            let mut opts = settings::merge(
+                &[
+                    ("cli", &cli_layer),
+                    ("script", &script_layer),
+                    ("config", &loaded.settings),
+                ],
+                &dflt,
+            )
+            .opts;
+            // 脚本不暴露这个开关：它是 main.rs 按任务类型决定的
+            // （urls_file 批量任务在下面单点覆盖成 true）
+            opts.continue_on_error = false;
 
             let total = cfg.tasks.len();
             println!("[*] 脚本: {} （{} 个任务）", script.display(), total);

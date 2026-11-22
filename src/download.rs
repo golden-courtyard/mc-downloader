@@ -56,6 +56,11 @@ pub struct DownloadOpts {
     /// **是全局的，不是每连接一份** —— 所有 chunk 都过同一个令牌桶
     /// （位置在 `Progress::add_throttled`）。
     pub max_speed: Option<u64>,
+    /// 下载完是否给可执行文件打 Mark-of-the-Web（见 `src/motw.rs`）。
+    ///
+    /// 默认 `true`：浏览器下载会给文件打 MotW，我们 `fs::write` 出来的文件没有它，
+    /// 等于让 SmartScreen 在用户双击时不报警。非 Windows 上是 no-op。
+    pub motw: bool,
 }
 
 impl Default for DownloadOpts {
@@ -69,6 +74,7 @@ impl Default for DownloadOpts {
             timeout_secs: DEFAULT_TIMEOUT_SECS,
             continue_on_error: false,
             max_speed: None,
+            motw: true,
         }
     }
 }
@@ -312,10 +318,11 @@ async fn one(
         && size >= SPLIT_THRESHOLD
     {
         one_split(client, job, &dst, size, opts, pg).await?;
-        return Ok((job.path.clone(), false));
+    } else {
+        one_stream(client, job, &dst, pg).await?;
     }
-
-    one_stream(client, job, &dst, pg).await?;
+    // 收尾：给可执行文件打 MotW（浏览器会给，我们自己写字节就得自己补）
+    crate::motw::mark_if_enabled(&dst, &job.url, opts.motw);
     Ok((job.path.clone(), false))
 }
 
