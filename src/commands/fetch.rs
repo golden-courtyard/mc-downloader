@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::commands::Ctx;
 use mc_downloader::version::SizeHint;
-use mc_downloader::{download, url_list, version};
+use mc_downloader::{download, url_list};
 
 /// 下载单个 URL。
 ///
@@ -28,10 +28,14 @@ pub async fn run(
     mirrors: Vec<String>,
     ctx: &Ctx,
 ) -> Result<()> {
-    let (name, fell_back) = match name {
-        Some(n) => (n, false),
-        None => url_list::name_or_out_bin(&url),
-    };
+    // 名字推导只有一份实现（lib 的 `job_from_url`），`run` 也走它
+    let (job, fell_back) = url_list::job_from_url(
+        &url,
+        name.as_deref(),
+        size.map_or(SizeHint::Unknown, SizeHint::Hint),
+        mirrors.clone(),
+    );
+    let name = job.path.clone();
     if fell_back {
         eprintln!("[!] 这个 URL 推不出文件名（以 `/` 结尾，或只有主机名）");
         eprintln!("[!] 落地名回落为 out.bin —— 想指定名字请加 --name");
@@ -70,14 +74,6 @@ pub async fn run(
         }
     }
     println!("[*] 网络 : {}", ctx.net);
-    let job = version::Job {
-        url,
-        path: name,
-        sha1: None,
-        // --size 是**提示**：只决定分片还是单流，不参与 Content-Range 比对
-        size: size.map_or(SizeHint::Unknown, SizeHint::Hint),
-        mirrors,
-    };
     download::run(&[job], &dir, &ctx.opts).await?;
     println!("[+] 完成 -> {}", dst.display());
     Ok(())

@@ -35,6 +35,8 @@ pub struct ParsedList {
 /// - 推不出文件名（URL 以 `/` 结尾，或只有 host 没有 path）⇒ 跳过并计数
 /// - **两个 URL 推出同一个文件名** ⇒ 保留第一条、跳过后一条（同目录会互相覆盖）
 /// - 一条有效 URL 都没有 ⇒ **这时才报错**（否则"成功但什么都没下"更难查）
+use crate::version::{Job, SizeHint};
+
 pub fn parse(content: &str) -> Result<ParsedList> {
     let mut entries: Vec<Entry> = Vec::new();
     let mut skipped = 0usize;
@@ -166,6 +168,35 @@ pub fn name_or_out_bin(url: &str) -> (String, bool) {
         Some(n) => (n, false),
         None => ("out.bin".to_string(), true),
     }
+}
+
+/// 把一个 URL（+ 可选覆盖项）变成 [`Job`]。**`fetch` 与 `run` 共用的唯一推导口**。
+///
+/// 为什么必须收进 lib（审查 A2）：`commands/run.rs` 曾自己写
+/// `url.rsplit('/').next()`，于是同一个 URL 在两条路上的落盘名不一样 ——
+/// 它不剥 `?query`、不做 percent-decode（`f.zip?se=2026&sig=…` 会整段进文件名），
+/// 也拿不到"推不出 ⇒ 回落 out.bin"这个信号。
+///
+/// 名字**不在这里做安全校验**：`--name` 允许带子目录（`sub/x.bin`），落点校验由
+/// `pathsafe::under_root` 在碰文件系统之前统一做（见 `commands/fetch.rs` 与 `download::one`）。
+pub fn job_from_url(
+    url: &str,
+    name: Option<&str>,
+    size: SizeHint,
+    mirrors: Vec<String>,
+) -> (Job, bool) {
+    let (path, fell_back) = match name {
+        Some(n) => (n.to_string(), false),
+        None => name_or_out_bin(url),
+    };
+    let job = Job {
+        url: url.to_string(),
+        path,
+        sha1: None,
+        size,
+        mirrors,
+    };
+    (job, fell_back)
 }
 
 #[cfg(test)]
@@ -321,5 +352,53 @@ https://a.com/2.zip
             filename_from_url("http://h/a/%2e%2e/%2e%2e/x.bin").unwrap(),
             "x.bin"
         );
+    }
+}
+
+#[cfg(test)]
+mod job_from_url_tests {
+    use super::*;
+
+    /// A2 的判据：`fetch` 与 `run` 共用**同一份**推导。这三条正是当初两边不一致的地方。
+    #[test]
+    fn job_from_url_is_the_single_derivation() {
+        // ① 剥 `?query` —— 旧 `run` 实现会把 `?se=2026&sig=abc` 整段带进文件名
+        let (j, fell_back) = job_from_url(
+            "https://h/f.zip?se=2026&sig=abc",
+            None,
+            SizeHint::Unknown,
+            vec![],
+        );
+        assert_eq!(j.path, "f.zip");
+        assert!(!fell_back);
+
+        // ② percent-decode —— 旧实现留在磁盘上的是 `a%20b.zip`
+        let (j, _) = job_from_url("https://h/a%20b.zip", None, SizeHint::Unknown, vec![]);
+        assert_eq!(j.path, "a b.zip");
+
+        // ③ 推不出 ⇒ 回落 `out.bin`，而且**要能被调用方说明**（旧实现给 `download.bin` 且静默）
+        let (j, fell_back) = job_from_url("https://h/dir/", None, SizeHint::Unknown, vec![]);
+        assert_eq!(j.path, "out.bin");
+        assert!(
+            fell_back,
+            "回落必须让调用方能说明，否则用户不知道为什么叫 out.bin"
+        );
+
+        // ④ 用户给名字时优先（允许子目录），其余字段原样带过去
+        let (j, fell_back) = job_from_url(
+            "https://h/dir/",
+            Some("sub/x.bin"),
+            SizeHint::Hint(9),
+            vec!["https://mirror/x.bin".to_string()],
+        );
+        assert_eq!(j.path, "sub/x.bin");
+        assert!(!fell_back);
+        assert_eq!(j.size.bytes(), Some(9));
+        assert_eq!(
+            j.size.exact(),
+            None,
+            "用户给的是提示，不该进 Content-Range 比对"
+        );
+        assert_eq!(j.mirrors.len(), 1);
     }
 }

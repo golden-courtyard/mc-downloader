@@ -159,17 +159,18 @@ async fn run_one_task(
                         download::header_content_length(&resp)
                     }
                 };
-                let name = name.clone().unwrap_or_else(|| {
-                    url.rsplit('/').next().unwrap_or("download.bin").to_string()
-                });
-                let job = version::Job {
-                    url: url.clone(),
-                    path: name,
-                    sha1: None,
-                    // 脚本里的 `size` 与 `--size` 一样是**提示**：不参与 Content-Range 比对
-                    size: size.map_or(version::SizeHint::Unknown, version::SizeHint::Hint),
-                    mirrors: mirrors.clone(),
-                };
+                // 与 `fetch` 共用同一份推导（审查 A2）：不剥 query / 不 percent-decode 的旧实现在这里
+                let (job, fell_back) = url_list::job_from_url(
+                    url,
+                    name.as_deref(),
+                    size.map_or(version::SizeHint::Unknown, version::SizeHint::Hint),
+                    mirrors.clone(),
+                );
+                if fell_back {
+                    eprintln!(
+                        "[!] 这个 URL 推不出文件名，落地名回落为 out.bin —— 要指定名字请给任务加 name"
+                    );
+                }
                 download::run(&[job], root, opts).await?;
             }
         }
