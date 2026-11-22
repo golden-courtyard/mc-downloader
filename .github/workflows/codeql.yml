@@ -1,0 +1,35 @@
+name: CodeQL
+
+# 静态安全扫描（issue #17 建议 6）。
+#
+# 为什么带一个 `if` 开关：代码扫描要 GitHub Advanced Security —— **公开仓免费，私有仓要授权**。
+# 2026-11-23 在私有仓上实测的失败是：
+#
+#     Advanced Security must be enabled for this repository to use code scanning.
+#
+# 所以按**仓库可见性**开门：私有期间整个 job 跳过（run 仍是绿色，不会天天红）；
+# 仓库转公开后下一次触发自动开始分析。这不是"假门禁" —— 条件一满足它就会跑。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      # CodeQL 会读本次 workflow run 的信息；缺这条会以
+      # "Resource not accessible by integration" 失败（2026-11-23 实测）。
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: rust
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4
