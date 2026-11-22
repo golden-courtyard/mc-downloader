@@ -19,16 +19,31 @@ use mc_downloader::{download, url_list};
 /// - 推不出（以 `/` 结尾、只有主机名）才回落 `out.bin`，而且要在输出里**说明**，不静默
 /// - 目标已存在时默认**拒绝**：`sha1` 为空时 `download::one` 会把"同名已存在"当成
 ///   "已完成"直接跳过，用户会以为下好了 —— 跳过与覆盖两种都不该是默认行为
-pub async fn run(
-    url: String,
-    dir: PathBuf,
-    size: Option<u64>,
-    name: Option<String>,
-    force: bool,
-    mirrors: Vec<String>,
-    no_content_disposition: bool,
-    ctx: &Ctx,
-) -> Result<()> {
+///
+/// `fetch` 的全部入参。收成结构体是因为 clippy 的 `too_many_arguments` 已经报警（8/7）。
+///
+/// 收成结构体是因为 clippy 的 `too_many_arguments` 已经报警（8/7），**不是**为了好看 ——
+/// 再加一个开关时这层不会继续膨胀。
+pub struct FetchArgs {
+    pub url: String,
+    pub dir: PathBuf,
+    pub size: Option<u64>,
+    pub name: Option<String>,
+    pub force: bool,
+    pub mirrors: Vec<String>,
+    pub no_content_disposition: bool,
+}
+
+pub async fn run(a: FetchArgs, ctx: &Ctx) -> Result<()> {
+    let FetchArgs {
+        url,
+        dir,
+        size,
+        name,
+        force,
+        mirrors,
+        no_content_disposition,
+    } = a;
     let client = download::client(&ctx.opts)?;
 
     // 名字优先级（issue #16）：`--name` > `Content-Disposition` > URL 末段 > `out.bin`

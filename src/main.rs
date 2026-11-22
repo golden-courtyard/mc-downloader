@@ -259,13 +259,15 @@ async fn main() -> Result<()> {
             no_content_disposition,
         } => {
             commands::fetch::run(
-                url,
-                dir,
-                size,
-                name,
-                force,
-                mirrors,
-                no_content_disposition,
+                commands::fetch::FetchArgs {
+                    url,
+                    dir,
+                    size,
+                    name,
+                    force,
+                    mirrors,
+                    no_content_disposition,
+                },
                 &ctx,
             )
             .await?;
