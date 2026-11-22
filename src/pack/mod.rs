@@ -19,7 +19,7 @@ use std::path::Path;
 
 use crate::curseforge;
 use crate::download::DownloadOpts;
-use crate::version::Job;
+use crate::version::{Job, SizeHint};
 use spec::PackSpec;
 
 pub async fn install(pack: &Path, root: &Path, opts: &DownloadOpts) -> Result<()> {
@@ -55,7 +55,7 @@ pub async fn install(pack: &Path, root: &Path, opts: &DownloadOpts) -> Result<()
             url: e.url.clone(),
             path: e.path.clone(),
             sha1: e.sha1.clone(),
-            size: e.size,
+            size: SizeHint::from_exact(e.size),
             mirrors: Vec::new(),
         })
         .collect();
@@ -174,7 +174,7 @@ async fn install_curseforge(
             url: e.url.clone(),
             path: e.path.clone(),
             sha1: e.sha1.clone(),
-            size: e.size,
+            size: SizeHint::from_exact(e.size),
             mirrors: Vec::new(),
         })
         .collect();

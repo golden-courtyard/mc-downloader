@@ -184,7 +184,7 @@ fn part_path(dst: &Path) -> PathBuf {
 pub async fn run(jobs: &[Job], root: &Path, opts: &DownloadOpts) -> Result<()> {
     let client = client(opts)?;
 
-    let total_bytes: u64 = jobs.iter().filter_map(|j| j.size).sum();
+    let total_bytes: u64 = jobs.iter().filter_map(|j| j.size.bytes()).sum();
     let pg = match opts.max_speed {
         Some(rate) => {
             println!("[*] 限速: {}/s", human_rate(rate));
@@ -314,10 +314,10 @@ async fn one(
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    if let Some(size) = job.size
+    if let Some(size) = job.size.bytes()
         && size >= SPLIT_THRESHOLD
     {
-        one_split(client, job, &dst, size, opts, pg).await?;
+        one_split(client, job, &dst, size, job.size.exact(), opts, pg).await?;
     } else {
         one_stream(client, job, &dst, pg).await?;
     }
@@ -473,6 +473,8 @@ async fn one_split(
     job: &Job,
     dst: &Path,
     size: u64,
+    // 只有**权威**总长才拿来比对 Content-Range（`--size` 是提示，见 SizeHint）
+    expect_total: Option<u64>,
     opts: &DownloadOpts,
     pg: &Arc<Progress>,
 ) -> Result<()> {
@@ -610,8 +612,11 @@ async fn one_split(
                 let mut tried: Vec<usize> = Vec::new();
                 let mut attempt = 0u32;
                 let mut fatal: Option<anyhow::Error> = None;
+                // 上一个真实病因。`SourcesExhausted` 只表示"没有源可试了"，它本身不含原因；
+                // 不留档的话最终报错只剩"无可用源"，用户会以为是网络（审查 D1）。
+                let mut prev: Option<String> = None;
                 loop {
-                    match fetch_piece(&c, &pj, &t, size, &pg, &pool, &mut tried).await {
+                    match fetch_piece(&c, &pj, &t, expect_total, &pg, &pool, &mut tried).await {
                         Ok(()) => {
                             tbl.lock().await.mark_done(pj.piece_idx);
                             break;
@@ -625,13 +630,20 @@ async fn one_split(
                             }
                             // 无源可用 = 不可恢复：退避只会原地再撞一次，别白等
                             if e.downcast_ref::<SourcesExhausted>().is_some() {
-                                fatal = Some(e.context(format!("分片 {} 无可用源", pj.piece_idx)));
+                                let msg = match &prev {
+                                    Some(p) => {
+                                        format!("分片 {} 无可用源（上一个错误: {p}）", pj.piece_idx)
+                                    }
+                                    None => format!("分片 {} 无可用源", pj.piece_idx),
+                                };
+                                fatal = Some(e.context(msg));
                                 break;
                             }
                             if attempt >= retries {
                                 fatal = Some(e.context(format!("分片 {} 重试耗尽", pj.piece_idx)));
                                 break;
                             }
+                            prev = Some(format!("{e:#}"));
                             tokio::time::sleep(Duration::from_secs(1u64 << attempt)).await;
                             attempt += 1;
                         }
@@ -935,12 +947,13 @@ impl std::error::Error for RangeUnsupported {}
 
 /// 拉一个分片并写到指定偏移。
 ///
-/// `size` 是整文件的权威总长：用来比对 `Content-Range` 的总长，抓"远端对象中途被换掉"。
+/// `expect_total` 是**权威**总长：只有它参与 `Content-Range` 比对，抓"远端对象中途被换掉"。
+/// 用户给的提示（`--size`）不该走到这里 —— 它就是 C1 那条 bug 的来源。
 async fn fetch_piece(
     client: &reqwest::Client,
     pj: &PieceJob,
     path: &Path,
-    size: u64,
+    expect_total: Option<u64>,
     pg: &Arc<Progress>,
     pool: &Arc<SourcePool>,
     tried: &mut Vec<usize>,
@@ -1007,7 +1020,7 @@ async fn fetch_piece(
         .to_str()
         .with_context(|| format!("Content-Range 不是合法 ASCII: {url}"))
         .inspect_err(|_| pool.record_failure(idx))?;
-    if let Err(e) = check_content_range(cr, req_start, req_end_incl, Some(size)) {
+    if let Err(e) = check_content_range(cr, req_start, req_end_incl, expect_total) {
         pool.record_failure(idx);
         return Err(e)
             .with_context(|| format!("分片 {} 的 Content-Range 校验失败: {url}", pj.piece_idx));

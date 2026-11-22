@@ -11,6 +11,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use mc_downloader::download::DownloadOpts;
+use mc_downloader::version::SizeHint;
 use mc_downloader::{config, download, fabric, forge, neoforge, pack, url_list, vanilla, version};
 
 /// 执行脚本里的全部任务。
@@ -125,7 +126,7 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
                         url: e.url,
                         path: e.file_name,
                         sha1: None,
-                        size: None, // 未知 ⇒ 走单流；不为此多发 N 次 HEAD
+                        size: SizeHint::Unknown, // 未知 ⇒ 走单流；不为此多发 N 次 HEAD
                         mirrors: Vec::new(),
                     })
                     .collect();
@@ -150,7 +151,8 @@ async fn run_one_task(task: &config::TaskSpec, opts: &DownloadOpts) -> Result<()
                     url: url.clone(),
                     path: name,
                     sha1: None,
-                    size,
+                    // 脚本里的 `size` 与 `--size` 一样是**提示**：不参与 Content-Range 比对
+                    size: size.map_or(version::SizeHint::Unknown, version::SizeHint::Hint),
                     mirrors: mirrors.clone(),
                 };
                 download::run(&[job], root, opts).await?;

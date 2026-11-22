@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::path::Path;
 
 use crate::download::DownloadOpts;
-use crate::version::Job;
+use crate::version::{Job, SizeHint};
 
 #[derive(Debug, Deserialize)]
 struct Profile {
@@ -118,7 +118,7 @@ pub async fn install(mc: &str, loader: &str, root: &Path, opts: &DownloadOpts) -
             url: format!("{}/{rel}", lib.url.trim_end_matches('/')),
             path: format!("libraries/{rel}"),
             sha1: lib.sha1.clone(),
-            size: lib.size,
+            size: SizeHint::from_exact(lib.size),
             mirrors: Vec::new(),
         });
     }

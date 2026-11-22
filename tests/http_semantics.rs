@@ -40,7 +40,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use mc_downloader::download::{DownloadOpts, run};
-use mc_downloader::version::Job;
+use mc_downloader::version::{Job, SizeHint};
 use sha1::{Digest, Sha1};
 
 // ─────────────────────────── 常量 ───────────────────────────
@@ -395,7 +395,7 @@ fn job_with_sha1(url: &str, payload: &[u8]) -> Job {
         url: url.to_string(),
         path: "out.bin".to_string(),
         sha1: Some(sha1_hex(payload)),
-        size: Some(payload.len() as u64),
+        size: SizeHint::Exact(payload.len() as u64),
         mirrors: Vec::new(),
     }
 }
@@ -716,7 +716,7 @@ async fn declared_size_is_a_hint_not_a_check() {
         url: server.url("small.bin"),
         path: "out.bin".to_string(),
         sha1: None,
-        size: Some(DECLARED),
+        size: SizeHint::Hint(DECLARED),
         mirrors: Vec::new(),
     };
 
@@ -753,7 +753,7 @@ async fn job_path_traversal_is_rejected_before_any_network_action() {
         url: "http://127.0.0.1:1/never".to_string(),
         path: "../escaped.bin".to_string(),
         sha1: None,
-        size: Some(1024),
+        size: SizeHint::Exact(1024),
         mirrors: Vec::new(),
     };
 

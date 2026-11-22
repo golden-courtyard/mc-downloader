@@ -21,7 +21,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::download::DownloadOpts;
-use crate::version::Job;
+use crate::version::{Job, SizeHint};
 
 #[derive(Debug, Deserialize)]
 struct InstallProfile {
@@ -160,7 +160,7 @@ pub fn jobs_from_profiles(jsons: &[(&str, &str)]) -> Result<Vec<Job>> {
                 url: art.url.clone(),
                 path: format!("libraries/{}", art.path),
                 sha1: art.sha1.clone(),
-                size: art.size,
+                size: SizeHint::from_exact(art.size),
                 mirrors: Vec::new(),
             });
         }
@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(jobs[0].path, "libraries/a/b/1/b-1.jar");
         assert_eq!(jobs[0].url, "https://<你的源>/b-1.jar");
         assert_eq!(jobs[0].sha1.as_deref(), Some("aa"));
-        assert_eq!(jobs[0].size, Some(10));
+        assert_eq!(jobs[0].size, SizeHint::Exact(10));
     }
 
     #[test]

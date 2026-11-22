@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 
 use crate::commands::Ctx;
+use mc_downloader::version::SizeHint;
 use mc_downloader::{download, url_list, version};
 
 /// 下载单个 URL。
@@ -73,7 +74,8 @@ pub async fn run(
         url,
         path: name,
         sha1: None,
-        size,
+        // --size 是**提示**：只决定分片还是单流，不参与 Content-Range 比对
+        size: size.map_or(SizeHint::Unknown, SizeHint::Hint),
         mirrors,
     };
     download::run(&[job], &dir, &ctx.opts).await?;
