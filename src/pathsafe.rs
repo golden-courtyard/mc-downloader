@@ -265,7 +265,13 @@ mod tests {
         for bad in ["/etc/passwd", "\\windows\\x", "C:/x", "C:x", "c:\\x"] {
             assert!(check_rel(bad).is_err(), "应拒绝: {bad}");
         }
-        assert!(check_name("C:x").is_err()); // 盘符在单段名里也拒
+        // 盘符是 **Windows 专属**规则：Linux 上 `C:x` 只是一个合法文件名，
+        // 拿 Windows 的规则去拒它属于张冠李戴。两个平台各自的判据都要钉住。
+        if cfg!(windows) {
+            assert!(check_name("C:x").is_err(), "Windows 上盘符名危险");
+        } else {
+            assert!(check_name("C:x").is_ok(), "Linux 上它是普通文件名");
+        }
     }
 
     #[test]
@@ -314,10 +320,22 @@ mod tests {
 
     #[test]
     fn prefix_check_needs_component_boundary() {
-        // Windows 上 `C:\out2` 不是 `C:\out` 的子路径
-        let base = Path::new("D:\\tmp\\out");
-        let sibling = Path::new("D:\\tmp\\out2\\x");
-        assert!(!starts_with_path(sibling, base));
-        assert!(starts_with_path(Path::new("D:\\tmp\\out\\x"), base));
+        // `out2` 不是 `out` 的子路径 —— 这条必须在两个平台都成立，所以路径按平台取。
+        // （CI 在 Linux 上跑：早先这里写死了 Windows 路径，本地绿、CI 红。）
+        let (base, child, sibling) = if cfg!(windows) {
+            (
+                Path::new("D:\\tmp\\out"),
+                Path::new("D:\\tmp\\out\\x"),
+                Path::new("D:\\tmp\\out2\\x"),
+            )
+        } else {
+            (
+                Path::new("/tmp/out"),
+                Path::new("/tmp/out/x"),
+                Path::new("/tmp/out2/x"),
+            )
+        };
+        assert!(!starts_with_path(sibling, base), "out2 不是 out 的子路径");
+        assert!(starts_with_path(child, base), "out/x 应在 out 之下");
     }
 }
