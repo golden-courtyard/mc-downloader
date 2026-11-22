@@ -3,7 +3,7 @@
 > 从 Mojang 官方 CDN 下载 Minecraft 文件，或安装 Modrinth 格式整合包。
 > 下载结果直接是标准 `.minecraft` 目录结构，可被 PCL / 官方启动器 / HMCL 识别。
 
-> ⚠️ **使用前请读**：[免责声明与法律定位](#免责声明与法律定位)（文末）。
+> 注意：**使用前请读**：[免责声明与法律定位](#免责声明与法律定位)（文末）。
 > **一句话**：只从官方源下载**公开文件**；不包含、不分发任何游戏内容；不提供破解或账号绕过。
 
 ---
@@ -51,7 +51,7 @@ mc-downloader pack "xxx.mrpack" -d "D:/Games/.minecraft"
 
 **用 PCL / HMCL「添加游戏目录」指向 `-d` 的那个目录**，选对应版本启动。
 
-> ⚠️ **本工具只保证目录结构**（`versions/<id>/<id>.json` + `libraries/`），
+> 注意：**本工具只保证目录结构**（`versions/<id>/<id>.json` + `libraries/`），
 > **是否真能启动由你实际打开验证**。
 
 ### 出错了先看这三处
@@ -81,14 +81,14 @@ mc-downloader pack "xxx.mrpack" -d "D:/Games/.minecraft"
 
 | 项 | 状态 |
 |---|---|
-| 1.20.1 + **Forge 47.4.10** → 目录结构 | ✅ 与官方 installer 产物逐项一致（`mainClass` / patched client / libraries 数）|
-| **1.20.1 + Forge 47.4.10 → 实际启动** | ✅ **用户用 PCL 实测，可进入游戏** |
-| **1.20.1 + Fabric 0.19.5 → 实际启动** | ✅ **用户用 PCL 实测，可进入游戏** |
-| CurseForge 整合包 188 个 mod 对账 | ✅ 三个包全都对得上（`mods/` + `manual.txt` = manifest 条数）|
-| **NeoForge 21.1.265（MC 1.21.1）** | ✅ **真机通过（2026-10-27）** —— `EXIT=0`·210s·`mainClass = cpw.mods.bootstraplauncher.BootstrapLauncher`·产物 `versions/neoforge-21.1.265/`。此前卡在下载阶段是**网络**，装配阶段还暴露过三处代码 bug（已修，见 `2f6d09d`）|
-| **分片写入页对齐（#5）** | ⚠️ **结构对 + 本机实下**：单测断言片起点与片长都是 4096 的倍数；96 MiB / `--piece-conns 7` 实下输出「8 片 · 片大小 14376960 字节」（= 3510×4096），成品与 `curl` 独立取回 **SHA1 一致**。真机 I/O 证据（改前 8 个写偏移里 7 个不对齐 → 改后 8/8 对齐）见 `quant-report-20261122.md` 的 E3 |
+| 1.20.1 + **Forge 47.4.10** → 目录结构 | 完成：与官方 installer 产物逐项一致（`mainClass` / patched client / libraries 数）|
+| **1.20.1 + Forge 47.4.10 → 实际启动** | 完成：**用户用 PCL 实测，可进入游戏** |
+| **1.20.1 + Fabric 0.19.5 → 实际启动** | 完成：**用户用 PCL 实测，可进入游戏** |
+| CurseForge 整合包 188 个 mod 对账 | 完成：三个包全都对得上（`mods/` + `manual.txt` = manifest 条数）|
+| **NeoForge 21.1.265（MC 1.21.1）** | **真机通过（2026-10-27）** —— `EXIT=0`·210s·`mainClass = cpw.mods.bootstraplauncher.BootstrapLauncher`·产物 `versions/neoforge-21.1.265/`。此前卡在下载阶段是**网络**，装配阶段还暴露过三处代码 bug（已修，见 `2f6d09d`）|
+| **分片写入页对齐（#5）** | 注意：**结构对 + 本机实下**：单测断言片起点与片长都是 4096 的倍数；96 MiB / `--piece-conns 7` 实下输出「8 片 · 片大小 14376960 字节」（= 3510×4096），成品与 `curl` 独立取回 **SHA1 一致**。真机 I/O 证据（改前 8 个写偏移里 7 个不对齐 → 改后 8/8 对齐）见 `quant-report-20261122.md` 的 E3 |
 
-> ⚠️ 这张表**区分「结构对」和「真的能跑」**。只有标「实测」的那条是人工确认过的；
+> 注意：这张表**区分「结构对」和「真的能跑」**。只有标「实测」的那条是人工确认过的；
 > 其余是文件级比对 —— **结构一致不等于能启动**。
 
 ---
@@ -162,7 +162,7 @@ GitHub release :   25–92 KB/s
 
 ⇒ **先 `probe` 一下再填 `mirrors`，比盲目加镜像有用得多。**
 
-> ⚠️ **本工具不内置任何非官方镜像**，也不自动把 GitHub 换成第三方镜像 ——
+> 注意：**本工具不内置任何非官方镜像**，也不自动把 GitHub 换成第三方镜像 ——
 > 用哪个源由你决定。`probe` 只负责测，不负责选。
 
 ---
@@ -171,18 +171,18 @@ GitHub release :   25–92 KB/s
 
 | 输入 | 支持 |
 |---|---|
-| 原版任意版本 | ✅ |
-| **Modrinth 整合包**（`modrinth.index.json`）| ✅ |
-| **CurseForge 整合包**（`manifest.json`）| ✅ 需 `CURSEFORGE_API_KEY`；禁分发的模组生成 `manual.txt` |
-| 结构相同的 `.zip`（只改了扩展名）| ✅ |
-| **Fabric** 加载器 | ✅ **1.20.1 已实测可启动** |
-| **Forge** 加载器（`loader = "forge"` / `"forge:47.4.10"`）| ✅ 需 Java；下载由本工具做，processor 交给官方 installer。**1.20.1 已实测可启动** |
-| **NeoForge** 加载器（`loader = "neoforge"` / `"neoforge:21.1.264"`）| ✅ 需 Java 21+；版本号规则与 Forge 不同（MC `1.21.1` → NeoForge `21.1.x`），**NeoForge 从 MC 1.20.2 开始**，1.20.1 及更早请用 forge |
-| **HMCL / MCBBS / MMC** | ❌ 不认 |
+| 原版任意版本 | 支持 |
+| **Modrinth 整合包**（`modrinth.index.json`）| 支持 |
+| **CurseForge 整合包**（`manifest.json`）| 支持，需 `CURSEFORGE_API_KEY`；禁分发的模组生成 `manual.txt` |
+| 结构相同的 `.zip`（只改了扩展名）| 支持 |
+| **Fabric** 加载器 | 支持，**1.20.1 已实测可启动** |
+| **Forge** 加载器（`loader = "forge"` / `"forge:47.4.10"`）| 支持，需 Java；下载由本工具做，processor 交给官方 installer。**1.20.1 已实测可启动** |
+| **NeoForge** 加载器（`loader = "neoforge"` / `"neoforge:21.1.264"`）| 支持，需 Java 21+；版本号规则与 Forge 不同（MC `1.21.1` → NeoForge `21.1.x`），**NeoForge 从 MC 1.20.2 开始**，1.20.1 及更早请用 forge |
+| **HMCL / MCBBS / MMC** | 不认 |
 
 > 不支持不是"做不了"，是**没做**。加解析器即可，但会先确认需求。
 
-> ⚠️ **加载器只保证目录结构**（`versions/<id>/<id>.json` + `libraries/`）。
+> 注意：**加载器只保证目录结构**（`versions/<id>/<id>.json` + `libraries/`）。
 > **是否真能启动，本工具不验证**——请用 PCL / HMCL 这类启动器实际打开一次。
 
 ---
@@ -234,7 +234,7 @@ cargo build --release        # 产物: target/release/mc-downloader.exe（需 Ru
 
 ---
 
-## ⚠️ 免责声明与法律定位
+## 免责声明与法律定位
 
 **本工具属于通用下载工具，具有实质性非侵权用途。**
 
@@ -246,11 +246,11 @@ cargo build --release        # 产物: target/release/mc-downloader.exe（需 Ru
 
 **它不做的**：
 
-- ❌ 不包含、不分发任何游戏内容
-- ❌ 不提供账号验证绕过、离线破解
-- ❌ 不提供任何"非官方"下载源
-- ❌ 不修改任何第三方软件
-- ❌ 不针对特定侵权用途设计任何功能
+- 不包含、不分发任何游戏内容
+- 不提供账号验证绕过、离线破解
+- 不提供任何"非官方"下载源
+- 不修改任何第三方软件
+- 不针对特定侵权用途设计任何功能
 
 ### 相关法律条文（陈述条文本身，不构成本项目对自身合法性的判定）
 

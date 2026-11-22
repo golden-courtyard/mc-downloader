@@ -22,7 +22,7 @@
 
 **不做什么**：
 
-| ❌ 不做 | 理由 |
+| 不做 | 理由 |
 |---|---|
 | GUI | 目标用户是脚本/CI |
 | 浏览器集成 | IDM 的护城河，投入产出比极低 |
@@ -40,12 +40,12 @@
 | **Continuous batching** | **全局分片队列，新任务随时插入** | `scheduler.rs` |
 | **EPLB（专家负载均衡）** | **多镜像按实测吞吐分配分片** | `source.rs` |
 | **chunked prefill** | **大文件 Range 分片** | `download.rs` |
-| ~~ZOS（pinned memory）~~ | ❌ 不迁移 | GPU 专属，下载器无 CPU↔GPU 层 |
-| ~~KV cache 压缩 / 投机解码~~ | ❌ 不迁移 | 与下载无关 |
+| ~~ZOS（pinned memory）~~ | 不迁移 | GPU 专属，下载器无 CPU↔GPU 层 |
+| ~~KV cache 压缩 / 投机解码~~ | 不迁移 | 与下载无关 |
 
 **核心判断**：LLM 推理与下载器同构的地方是「**把大任务切小、动态调度、平衡负载**」，不同构的是 GPU 相关的全部机制。
 
-> ⚠️ **2026-10-21 核对源码后修正（原文写错了）**
+> 注意：**2026-10-21 核对源码后修正（原文写错了）**
 >
 > 原文这条写的是「PagedAttention + **BlockManager** → 固定大小分片 + **位图状态表**」。
 > 实际读 `DeepInfer/csrc/engine/block_manager.hpp`：
@@ -92,7 +92,7 @@ struct PieceTable {          // 现状：src/piece.rs
 | `size < 8 MiB` | **不分片**（单流）|
 | 否则 | `clamp(size / piece_conns, 1 MiB, 16 MiB)`，再**向下取整到 4 KiB** |
 
-**⚠️ 这条是本设计的核心**：**小文件不分片**——不是偷懒，是 aria2 的默认策略（`min-split-size=20M`），也是 MC 场景的实际情况。
+**这条是本设计的核心**：**小文件不分片**——不是偷懒，是 aria2 的默认策略（`min-split-size=20M`），也是 MC 场景的实际情况。
 
 切片策略的两次演进与取舍见
 [片大小耦合](.agents/notes/implemented/architecture/2026-10-27-piece-size-coupled-to-fanout.md) 与
@@ -189,7 +189,7 @@ Pending ──取到──> Inflight ──成功──> Done
 分片       197 片 × 16 MB（走 PIECE_LARGE 档）
 并发       4
 耗时       约 2 分钟（11:01 → 11:03），均速约 26 MB/s
-SHA256     本地 c3514bf0…274b == 官方 SHA256SUMS 同值  ✅
+SHA256     本地 c3514bf0…274b == 官方 SHA256SUMS 同值
 .part      无残留
 ```
 
@@ -211,7 +211,7 @@ SHA256     本地 c3514bf0…274b == 官方 SHA256SUMS 同值  ✅
 
 ### 8.1 多源分配（已实现，2026-10-21）
 
-**状态**：✅ 已落地（`src/source.rs`）。**在 MC 场景仍然用不上**（每个文件只有一条官方 URL），
+**状态**：已落地（`src/source.rs`）。**在 MC 场景仍然用不上**（每个文件只有一条官方 URL），
 但 CLI 已支持 `--mirror`，对大文件分发场景可用。
 
 **实测**：Ubuntu 24.04 ISO（3.08 GB），清华单源 vs 清华+中科大双源，
@@ -241,15 +241,15 @@ SHA256     本地 c3514bf0…274b == 官方 SHA256SUMS 同值  ✅
 
 | 项 | 说明 |
 |---|---|
-| **完整性链缺口（三层）** | 依据 *Survivable Key Compromise in Software Update Systems*（CCS'10，被引 172）——软件更新必须认证**三类**信息：<br>① **内容层**：`version_manifest_v2.versions[].sha1` 与 `assetIndex.sha1/size` 官方都给了，我们的结构体没声明 → 白丢校验（改 3–4 行可补）<br>② **时效层（timeliness）**：**完全没有**。无版本号比较 ⇒ 攻击者塞一个旧 manifest，我们无从发现（回滚攻击）<br>③ **一致层（consistency）**：没有。无法发现"不同用户拿到不同版本"（split-view）<br>⚠️ **补两个 sha1 只修了①**，②③ 是设计级空白 |
+| **完整性链缺口（三层）** | 依据 *Survivable Key Compromise in Software Update Systems*（CCS'10，被引 172）——软件更新必须认证**三类**信息：<br>① **内容层**：`version_manifest_v2.versions[].sha1` 与 `assetIndex.sha1/size` 官方都给了，我们的结构体没声明 → 白丢校验（改 3–4 行可补）<br>② **时效层（timeliness）**：**完全没有**。无版本号比较 ⇒ 攻击者塞一个旧 manifest，我们无从发现（回滚攻击）<br>③ **一致层（consistency）**：没有。无法发现"不同用户拿到不同版本"（split-view）<br>注意：**补两个 sha1 只修了①**，②③ 是设计级空白 |
 | **续传不带 `If-Range`** | `download.rs:527` 只发 `Range`，**无 ETag / Last-Modified 校验**。服务器上文件换了（MC 版本更新 / 镜像同步滞后 / CDN 缓存不一致）时，会把**旧前段 + 新后段**拼成一个跨版本的混合文件：有 sha1 能抓但要整文件重下；**`fetch` / `generic` 无 sha1 则静默交付坏文件**。<br>标准解法 `If-Range: <strong ETag>`：校验器变了让服务器回 200 全量，客户端从头下而不是拼接 |
-| **`--adaptive`：触发条件（已修）与调节粒度（物理限制）是两件事**<br>✅ **已实测 + 已修（2026-10-21，`39765be`）** | **必须分两层看，混起来会得出错误结论。**<br><br>**① 触发 —— 已修**：原条件 `avail > 1` 永不成立（`forget_permits` 只减空闲许可，而稳态下 `avail` 恒 0）⇒ 减半分支实际是死的。<br>`39765be` 换成 **budget 闸门**（`AtomicUsize` + `in_flight`）后，cut 前置只有 `budget > 1` + delta 下降 + 防抖冷却，**不需要 add 累积**。<br>⚠️ **"能 cut"依赖片大小**：**4MB 片**（素材 ≤256MB）时 25s/12 tick 下 `conns=16` 也能 cut；**16MB 片**（素材 >256MB）会先被慢速守卫退回（见 ③），此时 **cut=0 是正确行为，不是回归**。<br>门槛（16 连）：**4MB 片 ⇒ 总吞吐 ≥ ~85mbit**；**16MB 片 ⇒ ≥ ~340mbit**。<br><br>**② 生效 —— 物理限制，未修**：减半只"停止放行新片"，**不打断在飞** ⇒ 实际生效 = 一片的剩余时间。<br>⚠️ **下表按 4MB 片计**；素材 >256MB 时片是 **16MB**，生效时间 **×4**，且很可能先触发 ③ 的退回（即根本轮不到"生效"）。<br><br>| 16 连 @ | 4MB 一片 | 减半生效 |<br>|---|---|---|<br>| 400mbit | 1.3 s | 1.3 s ✅ |<br>| 80mbit | 6.4 s | 6.4 s ⚠️ |<br>| **8mbit** | **64 s** | **64 s** ❌ |<br><br>⇒ 8mbit 下 64s 才生效，**来不及防 10s 的停摆**（批次 5 实测连续 5 tick 为 0）。<br>**三条修法全是负收益**：<br>· M1 排队取许可 → 等 worker 释放 → 64s<br>· M2 只挡新请求 → 同样 64s<br>· M3 abort 在飞 → 立即，但**丢 32MB 重下 32s**（丢 32s 换防 10s）<br><br>**③ 所以慢速链路改为「诚实降级」**：一片耗时 > 3 tick（6s）时**告警一次并退回固定并发**（`39765be` 已实现，含 `reason=coarse_grain` / `no_data` 两种）。<br>⚠️ 退回后 **cut 应为 0，这是正确行为**，不是回归。 |
+| **`--adaptive`：触发条件（已修）与调节粒度（物理限制）是两件事**<br>**已实测 + 已修（2026-10-21，`39765be`）** | **必须分两层看，混起来会得出错误结论。**<br><br>**① 触发 —— 已修**：原条件 `avail > 1` 永不成立（`forget_permits` 只减空闲许可，而稳态下 `avail` 恒 0）⇒ 减半分支实际是死的。<br>`39765be` 换成 **budget 闸门**（`AtomicUsize` + `in_flight`）后，cut 前置只有 `budget > 1` + delta 下降 + 防抖冷却，**不需要 add 累积**。<br>注意：**"能 cut"依赖片大小**：**4MB 片**（素材 ≤256MB）时 25s/12 tick 下 `conns=16` 也能 cut；**16MB 片**（素材 >256MB）会先被慢速守卫退回（见 ③），此时 **cut=0 是正确行为，不是回归**。<br>门槛（16 连）：**4MB 片 ⇒ 总吞吐 ≥ ~85mbit**；**16MB 片 ⇒ ≥ ~340mbit**。<br><br>**② 生效 —— 物理限制，未修**：减半只"停止放行新片"，**不打断在飞** ⇒ 实际生效 = 一片的剩余时间。<br>注意：**下表按 4MB 片计**；素材 >256MB 时片是 **16MB**，生效时间 **×4**，且很可能先触发 ③ 的退回（即根本轮不到"生效"）。<br><br>| 16 连 @ | 4MB 一片 | 减半生效 |<br>|---|---|---|<br>| 400mbit | 1.3 s | 1.3 s（可）|<br>| 80mbit | 6.4 s | 6.4 s（勉强）|<br>| **8mbit** | **64 s** | **64 s**（不可）|<br><br>⇒ 8mbit 下 64s 才生效，**来不及防 10s 的停摆**（批次 5 实测连续 5 tick 为 0）。<br>**三条修法全是负收益**：<br>· M1 排队取许可 → 等 worker 释放 → 64s<br>· M2 只挡新请求 → 同样 64s<br>· M3 abort 在飞 → 立即，但**丢 32MB 重下 32s**（丢 32s 换防 10s）<br><br>**③ 所以慢速链路改为「诚实降级」**：一片耗时 > 3 tick（6s）时**告警一次并退回固定并发**（`39765be` 已实现，含 `reason=coarse_grain` / `no_data` 两种）。<br>注意：退回后 **cut 应为 0，这是正确行为**，不是回归。 |
 
 #### B. 协议与实现待办
 
 | 项 | 说明 |
 |---|---|
-| 断点状态持久化 | ✅ **已落地（v0.5，见 §11.4）**：位图旁挂 `<name>.part.state`，进程被杀后重跑只补缺口 |
+| 断点状态持久化 | **已落地（v0.5，见 §11.4）**：位图旁挂 `<name>.part.state`，进程被杀后重跑只补缺口 |
 | 分片级 SHA1 | 现在校验整文件（正确但需等全部下完）；Modrinth/原版 manifest 都只有全文件 SHA1，分片级需自建索引 |
 | HTTP/3（QUIC）| 需要 `quinn`，且要求服务端支持；当前 CDN 多数只到 h2 |
 | `one_split` 仍偏长 | 已从 8 参数降到 6，但函数体仍有 ~200 行（建表/预分配/源池/调度/worker/tuner/校验/落盘）。下一轮可再拆成 `prepare` / `run_workers` / `finalize` 三段 |
@@ -270,7 +270,7 @@ SHA256     本地 c3514bf0…274b == 官方 SHA256SUMS 同值  ✅
 
 | 项 | 说明 |
 |---|---|
-| **`reqwest` 默认 `native-tls` → 需要 OpenSSL 头文件** | 2026-10-21 在 Kali VM 上撞到：只有运行时 `libssl.so.3`、无 `libssl-dev`，`cargo build` 直接失败（`Could not find directory of OpenSSL installation`）。CI 上能过是因为 ubuntu-latest 自带 `libssl-dev`。<br>**建议评估切 `rustls-tls`**：`default-features = false, features = ["json", "stream", "rustls-tls"]`。<br>收益：去掉 C 依赖 ⇒ 交叉编译到 `x86_64-unknown-linux-musl`（静态单文件）变得可行、任何 Linux 都能直接编译。<br>代价：需确认证书验证行为差异（rustls 更严）与根证书来源（`webpki-roots` vs 系统）。<br>⚠️ 这会改 TLS 栈，属**行为变更**，需要单独一轮 + 审查 |
+| **`reqwest` 默认 `native-tls` → 需要 OpenSSL 头文件** | 2026-10-21 在 Kali VM 上撞到：只有运行时 `libssl.so.3`、无 `libssl-dev`，`cargo build` 直接失败（`Could not find directory of OpenSSL installation`）。CI 上能过是因为 ubuntu-latest 自带 `libssl-dev`。<br>**建议评估切 `rustls-tls`**：`default-features = false, features = ["json", "stream", "rustls-tls"]`。<br>收益：去掉 C 依赖 ⇒ 交叉编译到 `x86_64-unknown-linux-musl`（静态单文件）变得可行、任何 Linux 都能直接编译。<br>代价：需确认证书验证行为差异（rustls 更严）与根证书来源（`webpki-roots` vs 系统）。<br>注意：这会改 TLS 栈，属**行为变更**，需要单独一轮 + 审查 |
 
 ---
 
@@ -333,7 +333,7 @@ pub struct Progress {
 拆成 `src/lib.rs`（11 个 pub mod）+ `src/main.rs`（只做 CLI 解析与分派）之后，
 此前 **929 行零测试**的 IO 密集代码第一次可测。
 
-> ⚠️ **副作用要记住**：`pub` 项在 lib 里不受 `dead_code` 检查。
+> 注意：**副作用要记住**：`pub` 项在 lib 里不受 `dead_code` 检查。
 > 拆完 clippy 告警从 8 条掉到 2 条，**那是告警被藏起来，不是问题被解决**。
 > 清死代码得靠人工 grep，不能靠 clippy。
 
@@ -407,7 +407,7 @@ cargo build --release --locked
 配套：`.gitattributes` 全仓 `eol=lf`（此前 6 个文件是 CRLF，混排会让 rustfmt
 的 diff 变成整文件重写）。
 
-> ⚠️ **刻意不用 `rust-toolchain.toml` 钉 channel**：那会让 rustup 每次去同步
+> 注意：**刻意不用 `rust-toolchain.toml` 钉 channel**：那会让 rustup 每次去同步
 > channel 元数据，离线或代理受限时**连 cargo 都跑不起来**（本机实测）。
 
 **语法基线分三层，缺一层就只是「允许」而不是「要求」**：
@@ -445,7 +445,7 @@ cargo build --release --locked
 
 **仍未稳定的**（别写）：`iter::next_chunk` · `slice::array_chunks`
 
-⚠️ **反直觉的一条**：edition 2024 下 `&raw mut STATIC` **不需要** `unsafe` 块，
+注意：**反直觉的一条**：edition 2024 下 `&raw mut STATIC` **不需要** `unsafe` 块，
 写了会被报 `unnecessary unsafe`。这条只有实际编译才发现，很容易凭记忆写错。
 
 ### 11.6 本机环境坑（会复发）
@@ -469,7 +469,7 @@ cargo build --release --locked
   实测：产出 4.48 MB、`--version` 正常、`vanilla 1.7.10` 全缓存回归通过、
   **release 下 62 个测试同样全绿**。
 
-  ⚠️ **判据：遇到「做不到」先问「是能力不行，还是某个具体路径被拦」** ——
+  注意：**判据：遇到「做不到」先问「是能力不行，还是某个具体路径被拦」** ——
   这两者的绕法完全不同，而后者往往换条路就通了。之前把它写成「本地无法验证」，
   于是把一个能 20 秒做完的验证推给了 CI，等到下一轮才发现是路径问题。
 
@@ -556,10 +556,10 @@ cargo build --release --locked
    `del` 与 `add` 之间有**空窗**，此时流量走默认 qdisc——阶跃测量会被污染。
    实测（2026-10-21，VM 上）：
    ```bash
-   tc qdisc replace dev eth0 root netem limit 1000   # ✅ REPLACE-OK
-   tc qdisc replace dev eth0 root fq_codel           # ✅ 恢复，网络仍通
+   tc qdisc replace dev eth0 root netem limit 1000   # REPLACE-OK
+   tc qdisc replace dev eth0 root fq_codel           # 恢复，网络仍通
    ```
-   ⚠️ 恢复后 handle 会变（`0:` → `8016:`），**功能等价、参数一致**，不必强求 handle 相同。
+   注意：恢复后 handle 会变（`0:` → `8016:`），**功能等价、参数一致**，不必强求 handle 相同。
 3. **收尾必须恢复 `fq_codel`**。VM 的 `eth0` 默认是 `fq_codel`，恢复成 `noqueue` 会静默改变基线，
    后续所有"真实"测量都不可比。
 
@@ -578,7 +578,7 @@ cargo build --release --locked
 | **R2** | 真实源 + 限速 | `eth0` rate（≤ R1 实测值的一半）| 吞吐 ∈ `[0.8, 1.2]×`，sha1 一致 |
 | **R3** | 真实源 + 丢包 | `eth0` loss 5% | 完成且 sha1 一致；**记录重试次数**（不只看结果）|
 | **R4** | 真实源 + 中途 RST | `iptables` 断**出向** | **续传生效的正判据：第二轮下载字节 < 总字节**（只比 sha1 无法区分"续传"与"从头重下"，见 §8.2 与 `net_faults` T3.3）|
-| **R5** | 真实源 + 带宽阶跃 | `eth0` rate 变化 | `--adaptive` 的**并发预算变化（`budget`）**能与吞吐变化对齐；<br>⚠️ 2026-10-21 起 adaptive 用 budget 闸门，无 permit；且**慢速链路会先被守卫退回**（一片 > 3 tick），那种情况下"不动作"是正确行为 |
+| **R5** | 真实源 + 带宽阶跃 | `eth0` rate 变化 | `--adaptive` 的**并发预算变化（`budget`）**能与吞吐变化对齐；<br>注意：2026-10-21 起 adaptive 用 budget 闸门，无 permit；且**慢速链路会先被守卫退回**（一片 > 3 tick），那种情况下"不动作"是正确行为 |
 | **R6** | 长时稳定性 | 无 | 连续 30 min 下多个版本，**fd 数 / RSS 不单调增长**；`.part*` 不累积 |
 
 **R6 是合成测试完全覆盖不到的一条**——短测试看不到句柄泄漏与内存增长。
@@ -587,12 +587,12 @@ cargo build --release --locked
 
 | 问题 | 归 L0（`net_faults`）| 归 L1（本节）|
 |---|---|---|
-| 判定逻辑对不对（假 PASS）| ✅ | — |
-| 分片偏移 / 续传状态机 | ✅ | — |
-| 真实拥塞下的吞吐 | — | ✅ |
-| 真实 CDN 的多 IP / 缓存 | — | ✅ |
-| 长时资源泄漏 | — | ✅ |
-| 平台语义（稀疏/大小写/rename）| ✅（走 CI）| — |
+| 判定逻辑对不对（假 PASS）| 覆盖 | — |
+| 分片偏移 / 续传状态机 | 覆盖 | — |
+| 真实拥塞下的吞吐 | — | 覆盖 |
+| 真实 CDN 的多 IP / 缓存 | — | 覆盖 |
+| 长时资源泄漏 | — | 覆盖 |
+| 平台语义（稀疏/大小写/rename）| 覆盖（走 CI）| — |
 
 **判据：能合成的一律合成**（快、可复现、进 CI）；只有"必须真"的才上 VM。
 
@@ -615,9 +615,9 @@ cargo build --release --locked
 
 | 决策 | 结论 | 理由 | 复核条件（什么情况下重新考虑）|
 |---|---|---|---|
-| **BitTorrent** | ❌ **不做** | 有成熟客户端（迅雷 / qBittorrent / Transmission）已完全覆盖。自研要背 tracker 协议 + DHT + peer wire + choking 算法，成本远超收益，而且**与"分片式下载器"的定位重叠但动机相反**（BT 靠用户互相供给，我们靠源站带宽）| 出现"**只发 torrent、不提供直链**"的必需源（某些大整合包的私下分发渠道）|
-| **FTP** | ❌ **不做** | MC 生态**零使用**（Mojang / Modrinth / 各镜像全是 HTTP）。FTP 是双 TCP 连接 + 明文认证的老设计，在 NAT/防火墙下还要分主动/被动模式，实现与调试成本都不低 | 出现**只有 FTP 入口**的用户源（如某校内镜像站）|
-| **S3 原生 API** | ❌ **不需要** | **预签名 URL 就是 HTTP GET**，现有 `fetch` 已能下，Range 分片语义完全一致（见 §13.2 的验证命令）。只有"列桶 / 分片上传 / 生命周期管理"才需要原生 SDK | 要做**上传/同步**功能时（当前不做）|
+| **BitTorrent** | **不做** | 有成熟客户端（迅雷 / qBittorrent / Transmission）已完全覆盖。自研要背 tracker 协议 + DHT + peer wire + choking 算法，成本远超收益，而且**与"分片式下载器"的定位重叠但动机相反**（BT 靠用户互相供给，我们靠源站带宽）| 出现"**只发 torrent、不提供直链**"的必需源（某些大整合包的私下分发渠道）|
+| **FTP** | **不做** | MC 生态**零使用**（Mojang / Modrinth / 各镜像全是 HTTP）。FTP 是双 TCP 连接 + 明文认证的老设计，在 NAT/防火墙下还要分主动/被动模式，实现与调试成本都不低 | 出现**只有 FTP 入口**的用户源（如某校内镜像站）|
+| **S3 原生 API** | **不需要** | **预签名 URL 就是 HTTP GET**，现有 `fetch` 已能下，Range 分片语义完全一致（见 §13.2 的验证命令）。只有"列桶 / 分片上传 / 生命周期管理"才需要原生 SDK | 要做**上传/同步**功能时（当前不做）|
 
 ```bash
 # 验证"S3 其实已经支持"——预签名 URL 就是普通 HTTP
@@ -642,13 +642,13 @@ mc-downloader fetch "https://<bucket>.s3.amazonaws.com/<key>?X-Amz-Signature=...
 
 | 优先级 | 项 | 判据 |
 |---|---|---|
-| **P1** | **`--adaptive`：三项全落地** | ① **触发条件**（`39765be`：budget 闸门），**在守卫放行的组合下** `conns=16` 在 25s 内也能 cut（前提：片 ≤ 3 tick）；② **慢速守卫 + 告警退回**（`39765be`，`reason=coarse_grain` / `no_data`）；③ **减半阈值 25%**（`27e7d0e`，净 +3 行）。<br><br>③ 的实测：<br>· **恒定源**（4MB/s，`delta` 与 `last` 精确相等 = 8388608）⇒ `cut=0` 且 `hold=4` —— **不是“没测到”，是“不该减”**<br>· **掉 15%**（4→3.4MB/s）⇒ `cut=0`；**掉 50%**（4→2）⇒ `cut=1 take=2`<br>· **A 臂等价**（80→8mbit，掉 90%）⇒ `cut=1`（加阈值前是 8）<br><br>⚠️ **A 臂 `cut` 从 8 降到 1–2 是设计意图**：8mbit 段内 delta 只抖 ±5%，够不到 25% ⇒ 不再反复减半；判据仍是 `cut ≥ 1`，文件头已注明期望区间。<br>⚠️ 阈值只加在**减**侧 —— `add` 侧不动（加法慢一点无妨，减法砍错代价大）。<br><br>④ 想真正支持窄带，仍需“分片大小自适应”（P2）或“可中断下载”。 |
+| **P1** | **`--adaptive`：三项全落地** | ① **触发条件**（`39765be`：budget 闸门），**在守卫放行的组合下** `conns=16` 在 25s 内也能 cut（前提：片 ≤ 3 tick）；② **慢速守卫 + 告警退回**（`39765be`，`reason=coarse_grain` / `no_data`）；③ **减半阈值 25%**（`27e7d0e`，净 +3 行）。<br><br>③ 的实测：<br>· **恒定源**（4MB/s，`delta` 与 `last` 精确相等 = 8388608）⇒ `cut=0` 且 `hold=4` —— **不是“没测到”，是“不该减”**<br>· **掉 15%**（4→3.4MB/s）⇒ `cut=0`；**掉 50%**（4→2）⇒ `cut=1 take=2`<br>· **A 臂等价**（80→8mbit，掉 90%）⇒ `cut=1`（加阈值前是 8）<br><br>注意：**A 臂 `cut` 从 8 降到 1–2 是设计意图**：8mbit 段内 delta 只抖 ±5%，够不到 25% ⇒ 不再反复减半；判据仍是 `cut ≥ 1`，文件头已注明期望区间。<br>注意：阈值只加在**减**侧 —— `add` 侧不动（加法慢一点无妨，减法砍错代价大）。<br><br>④ 想真正支持窄带，仍需“分片大小自适应”（P2）或“可中断下载”。 |
 | **P1** | **多源分配用实测吞吐而非轮询** | `source.rs` 已有按实测吞吐分配的雏形。做到 = 慢源被自动降权，整体吞吐 ≥ 最快源 × 0.9 |
 | P2 | **连接复用（keep-alive）** | 现在每片一次请求。做到 = 同源多片复用连接，减少握手开销（对 4MB/片不算大头，但小文件分片有意义）|
 | P2 | **内存上限** | 现在片级缓冲。做到 = 可配置内存上限，大文件不随并发线性增长 |
 | P3 | HTTP/2 多路复用 | `reqwest` 默认已开 http2，但**未验证在单连接多路复用下的分片收益**；需实测后再决定是否显式配置 |
 
-> ⚠️ **"更快速"的判断标准是"端到端下载耗时"，不是"峰值带宽"** ——
+> 注意：**"更快速"的判断标准是"端到端下载耗时"，不是"峰值带宽"** ——
 > 峰值带宽可以靠加并发刷出来，但那会在窄带上造成拥塞崩溃（AIMD 那批实测到的停摆/回补就是这个）。
 
 ### 13.3 与 §12（真实网络验证）的关系
@@ -671,12 +671,12 @@ mc-downloader fetch "https://<bucket>.s3.amazonaws.com/<key>?X-Amz-Signature=...
 |---|---|
 | 变量名 | `CURSEFORGE_API_KEY` |
 | 读取 | 缺失时**明确报错**（含获取与设置指引），**不许静默跳过、不许用空串调 API** |
-| 配置文件 | ❌ **不做** |
+| 配置文件 | **不做** |
 
 > **为什么不做配置文件**：env 是唯一"零落盘点"的方案。
 > 多一条配置文件通道 = 多一个必须保证在 `.gitignore` 里的文件 = 多一个泄露面，而收益接近零（`export` 一行就够）。
 >
-> ⚠️ Windows 的坑：`setx` 只改注册表里的用户环境变量，**当前已开的终端读不到**，必须重开。
+> 注意：Windows 的坑：`setx` 只改注册表里的用户环境变量，**当前已开的终端读不到**，必须重开。
 > 要当前窗口生效得用 `set CURSEFORGE_API_KEY=...`。
 
 ### 14.2 格式识别：**`kind = "pack"` 自动分流**，不新增 kind
