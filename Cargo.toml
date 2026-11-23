@@ -31,7 +31,7 @@ lto = "thin"
 codegen-units = 1
 strip = true
 # 刻意**不设** panic = "abort" —— 2026-10-21 已实测（实验与原始输出留在
-# C:\hub\reference\rust\panic-lab\）：
+# 实验记录见 .agents/notes 里那条复盘）：
 #
 #   unwind（当前）：worker panic → tokio 接成 JoinError → 下面那三态 match 的
 #                   第三分支可达 → abort flusher、落 .part.state、返回错误

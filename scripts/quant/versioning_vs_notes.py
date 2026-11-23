@@ -3,7 +3,7 @@
 
 ## 口径（**先写下来再测**，事后不改判据）
 
-研究对象：`E:\\Users\\lmq\\deepseek-harness` 的 `dsh-v*` 标签与 `.agents/notes/` 下的决策记录。
+研究对象：任何被指定为 `--repo` 的研究仓库（本脚本不内置路径）；本仓库的用法见 `scripts/quant/README.md`。
 只读，不修改被研究对象。
 
 **三个问题**
@@ -37,8 +37,22 @@ from datetime import date
 import csv
 import re
 
-REPO = r"E:\Users\lmq\deepseek-harness"
-OUT_CSV = r"D:\Users\lmq\mc-downloader\docs\reports\raw\versioning-vs-notes.csv"
+# 路径一律由调用方给（--repo 或环境变量 DSH_REPO），仓库里不写任何本机路径。
+import argparse
+import os
+import pathlib
+
+_ap = argparse.ArgumentParser(description="notes 吞吐 vs 发布节奏的定量观察")
+_ap.add_argument("--repo", default=os.environ.get("DSH_REPO", ""),
+                 help="被研究的仓库路径（也可用环境变量 DSH_REPO）")
+_args = _ap.parse_args()
+if not _args.repo:
+    raise SystemExit("请用 --repo <path> 或环境变量 DSH_REPO 指定被研究的仓库")
+
+REPO = _args.repo
+# 产物落在本仓库的 docs/reports/raw/ 下（相对脚本位置推导，不写字面路径）
+OUT_CSV = str(pathlib.Path(__file__).resolve().parents[2]
+              / "docs" / "reports" / "raw" / "versioning-vs-notes.csv")
 
 
 def git(*args):

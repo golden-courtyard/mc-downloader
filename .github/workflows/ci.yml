@@ -53,6 +53,21 @@ jobs:
 
       # issue #15：**不内置任何下载源**。除 docs/ 与 tests/ 外，src/ 里不该出现任何源地址。
       # 这条是机器判据 —— 少写一行注释不会被发现，多写一行硬编码却会被它抓住。
+      - name: No machine-specific paths in tracked files
+        # 公开仓：文档与脚本里不许出现本机绝对路径（用户目录、本地盘符、私有课题目录）。
+        # 只查这一组**具名**模式，避免误伤 src/pathsafe.rs 里当测试数据的 `C:\x`。
+        run: |
+          set -eu
+          # `Users\\[^<]` 是为了放过文档里的占位写法 `C:\Users\<you>`；
+          # 排除本文件自身（模式串本身会被 grep 命中）。
+          hits=$(git grep -nE '[A-Za-z]:\\Users\\[^<]|/Users/[A-Za-z][A-Za-z0-9._-]*/|C:\\hub|lmq-mcd-target|Academic/(research|tools)' \
+                   -- ':!docs/reports/raw' ':!.github/workflows/ci.yml' || true)
+          if [ -n "$hits" ]; then
+            echo "发现本机路径："
+            echo "$hits"
+            exit 1
+          fi
+          echo "no machine-specific paths OK"
       - name: No built-in sources
         run: |
           if grep -rnE 'piston-meta|launchermeta|launcher\.mojang|bmclapi|download\.minecraft|meta\.fabricmc|files\.minecraftforge|maven\.minecraftforge|maven\.neoforged|resources\.download|libraries\.minecraft' src/; then
