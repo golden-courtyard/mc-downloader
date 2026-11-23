@@ -1,6 +1,6 @@
 [package]
 name = "mc-downloader"
-version = "0.6.0"
+version = "0.6.0-rc.1"
 edition = "2024"
 description = "把 Minecraft 相关文件放到正确位置（下载源由你在 [source] 配置）"
 license = "MIT"

@@ -4,16 +4,13 @@
 
 ## [Unreleased]
 
-### 新增
-
-- 新子命令 `mc-downloader init`：建好平台配置目录（Windows `%APPDATA%\mc-downloader\`，Linux/macOS `~/.config/mc-downloader/`）并写入带注释的配置模板；六项源留空（工具不内置源）。
-  已存在时默认不覆盖，`--force` 才覆盖；`--dir` 可指定别处。
-
 （下一次发布前的新增改动记在这里；发布时整体改标题为 `[x.y.z] - YYYY-MM-DD`，内容不洗。）
 
 版本号怎么跳、标签长什么样，见 [docs/dev/versioning.md](docs/dev/versioning.md)。
 
-## [0.6.0] - 2026-11-23
+## [0.6.0-rc.1] - 2026-11-23
+
+这是**首个公开版本的预发布**：契约（`[source]` 六项、脚本 `schema`）已经冻结，接下来只修不改。用完一轮没有问题，再打 `mc-v0.6.0`。
 
 ### 破坏性变更
 
@@ -27,6 +24,8 @@
 
 ### 新增
 
+- 新子命令 `mc-downloader init`：建好平台配置目录（Windows `%APPDATA%\mc-downloader\`，Linux/macOS `~/.config/mc-downloader/`）并写入带注释的配置模板；六项源留空（工具不内置源）。
+  已存在时默认不覆盖，`--force` 才覆盖；`--dir` 可指定别处。
 - `fetch` 认 `Content-Disposition` 当落地名（过 `pathsafe`）。优先级：
   `--name` > `Content-Disposition` > URL 末段 > `out.bin`。`--no-content-disposition` 可关。
 - `--if-range`：分片带 `If-Range`，远端中途被换时当场降级成单流重下（默认关）。

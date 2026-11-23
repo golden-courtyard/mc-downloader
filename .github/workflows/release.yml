@@ -90,3 +90,5 @@ jobs:
           body_path: body.md
           files: dist/*
           fail_on_unmatched_files: true
+          # `-rc.N` / `-alpha.N` 一律标成 pre-release，免得陌生人当成正式版
+          prerelease: ${{ contains(github.ref_name, '-rc.') || contains(github.ref_name, '-alpha.') }}
