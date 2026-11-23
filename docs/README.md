@@ -21,7 +21,6 @@
 | 测试设施（云服务器 / Kali / Docker） | [dev/testing-infrastructure.md](dev/testing-infrastructure.md) |
 | 攻防靶场（只打自己的靶） | [dev/attack-defense-lab.md](dev/attack-defense-lab.md) |
 | 网络故障实测记录 | [reports/net_faults-report-20261021.md](reports/net_faults-report-20261021.md) |
-| 程序能读不能写 / 权限报错不指向真正原因 | [dev/troubleshooting.md](dev/troubleshooting.md) |
 
 ## 目录
 
