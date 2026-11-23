@@ -1,0 +1,92 @@
+name: Release
+
+# 打 `mc-v*` 标签时：构建两个平台的二进制、打包、发 Release。
+#
+# 为什么在 CI 里建而不是本机 `gh release create`：发布物要**能从标签复现**。
+# 本机产物看不出是哪个提交、哪个 toolchain 编的；这里 checkout 的就是标签本身。
+#
+# 版本号与标签的规则见 docs/dev/versioning.md；标签必须等于 Cargo.toml 的 version
+# （`tests/version_sync.rs` 在 tag 构建里会断言这一点，CI 那个 job 也跑）。
+
+on:
+  push:
+    tags: ["mc-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "已存在的标签（如 mc-v0.6.0）"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: mc-downloader-linux-x86_64.tar.gz
+          - os: windows-latest
+            asset: mc-downloader-windows-x86_64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        run: |
+          set -eu
+          tar -czf "${{ matrix.asset }}" -C target/release mc-downloader
+          tar -tzf "${{ matrix.asset }}"
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/release/mc-downloader.exe -DestinationPath "${{ matrix.asset }}"
+          Get-Item "${{ matrix.asset }}" | Select-Object Name, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Release notes from CHANGELOG
+        # 单一真源：CHANGELOG 里这一节的正文，不再手写第二份
+        run: |
+          set -eu
+          VERSION=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n1)
+          echo "version=$VERSION" >> "$GITHUB_ENV"
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { hit=1; next }
+            hit && /^## \[/ { exit }
+            hit { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG 里找不到 [$VERSION] 一节"; exit 1; }
+          { echo "**首次公开版本。** 本工具不内置任何下载源：先 \`mc-downloader init\`，再填 \`[source]\` 的六个键"; 
+            echo "（每个键指到哪一层见 docs/user/sources.md）。只想下单个文件用 \`fetch\`，不需要源。";
+            echo; echo "---"; echo; cat notes.md; } > body.md
+          head -c 400 body.md; echo
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: body.md
+          files: dist/*
+          fail_on_unmatched_files: true
