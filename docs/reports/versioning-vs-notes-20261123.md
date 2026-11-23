@@ -4,8 +4,15 @@
 
 **对象**：`E:\Users\lmq\deepseek-harness`，44 个 `dsh-v*` 标签（2026-08-17 .. 2026-11-22，97 天）与 4211 份 notes。
 
-**可重跑**：`scripts/quant/versioning_vs_notes.py` → `docs/reports/raw/versioning-vs-notes.csv`（44 行）。
-脚本头部写死了口径与局限，先写后测，未改判据。
+**可重跑（三段工具链，各做各擅长的）**：
+
+| 段 | 工具 | 文件 |
+|---|---|---|
+| 取数 | Python | [`scripts/quant/versioning_vs_notes.py`](../../scripts/quant/versioning_vs_notes.py) → [`docs/reports/raw/versioning-vs-notes.csv`](raw/versioning-vs-notes.csv)（44 行） |
+| 统计与图 | R 4.6.1 + ggplot2 + boot | [`scripts/quant/analysis/versioning_vs_notes.R`](../../scripts/quant/analysis/versioning_vs_notes.R) → [`figs/fig-versioning-notes.png`](figs/fig-versioning-notes.png) |
+| 交叉验算 | Wolfram | [`scripts/quant/analysis/versioning_vs_notes.wls`](../../scripts/quant/analysis/versioning_vs_notes.wls) |
+
+口径写在 Python 脚本头部，先写后测，未改判据。别用 MATLAB（本机那份是盗版，不放进交付链路）。
 
 ## 一、口径与局限（照搬脚本头部）
 
@@ -41,6 +48,39 @@
 **结论：rc 段不是"只修 bug"** —— 它只是**批量更小**（416 vs 2446 份），构成几乎相同。
 所以"rc 冻结契约、只接受修复"**不是 dsh 的做法**，是我们自己的纪律（详见 §五）。
 
+### 3.1 加了区间估计之后，话要说得更保守
+
+R 端对"份额"做了 bootstrap（2000 次重抽，按区间整段重抽）：
+
+| 段 | feature | bug-fix | architecture | process |
+|---|---|---|---|---|
+| alpha（22 个区间，2446 份） | 24.7% [20.2, 27.5] | 15.3% [13.0, 18.0] | 39.7% [34.9, 44.7] | 10.8% [8.2, 13.8] |
+| rc（21 个区间，416 份） | 24.8% [16.1, 34.8] | 19.5% [11.3, 30.6] | 38.2% [20.9, 51.3] | 7.5% [4.6, 10.7] |
+
+**所有类别的区间都重叠**，rc 那边尤其宽（只有 21 个区间、416 份）。所以准确的表述是：
+
+> **没有观察到 alpha 与 rc 在构成上有差异**，而不是"两者构成相同"。
+
+这不影响结论（rc 显然不是"只修 bug"），但把"相同"改成"没观察到差异"是必须的 ——
+后者才是这份数据能支持的话。
+
+### 3.2 两个引擎的交叉验算
+
+同一份 CSV，R 与 Wolfram 各算一遍：
+
+| 数字 | R | Wolfram |
+|---|---|---|
+| 区间数 | 43 | 43 |
+| implemented 中位数 | 33 | 33 |
+| implemented 均值 | 66.6 | 66.558 |
+| 提交数中位数 | 187 | 187 |
+| alpha 的 feature 份额 | 24.7% | 24.69% |
+| rc 的 feature 份额 | 24.8% | 24.76% |
+
+**一致。** 第一次跑是不一致的（Wolfram 端 n=42、rc 份额 21.8%），原因是它把首行
+（repo root 桶）多剔了一次、且 `impl` 与 `feature` 的缺失处理没对齐 —— 属于**口径错**，
+不是"两个引擎各有各的答案"。这类不一致的处理顺序应当是：**先查口径，再谈数值**。
+
 ## 四、节奏形态：预发布驱动，而且出现过版本回退
 
 | bump 类型 | 次数 | 提交均值 | implemented 均值 |
@@ -59,6 +99,11 @@
   | `dsh-v0.2.2-alpha.2` | 2026-10-28 | `dsh-v0.2.1-rc.5` | 2026-10-29 |
 
   同核心版本内的预发布标识回退：**0 次**（`alpha < rc` 的次序守得住）。
+
+![每次发布的决策记录产出](figs/fig-versioning-notes.png)
+
+左：双对数下"提交数 vs 新增 implemented"，rc 段与 alpha 段都沿同一条趋势线，说明**决定数量的主要是提交量，不是阶段**。
+右：两段的箱线图 —— rc 的批量小、方差大（21 个区间里最大 595 的那点是 `0.2.2` 之前的补丁段）。
 
 ## 五、对我们规矩的影响（三条改动）
 
