@@ -20,6 +20,8 @@ cargo build --release --locked
 
 - [ ] `README.md` 的「验证状态」表更新到本次日期，**结构对 / 真的能跑**分开写
 - [ ] `CHANGELOG.md` 新增本次版本一节，**已知残留**必须写（没做的比做了的更需要写下来）
+- [ ] **首次公开或大改之前先发 `-rc.N`**：契约冻结、只修不改；一轮反馈没有问题再打正式版
+      （`tests/version_sync.rs` 会核对标签与 `Cargo.toml` 一致，`-rc.N` 也一样）
 - [ ] `Cargo.toml` 版本号按 [versioning.md](versioning.md) §四**从 notes 推导**：
       改契约的 `implemented` ⇒ minor；只有 `bug-fix` ⇒ patch；只有 `proposed` ⇒ 不发版；**不跳号**
 - [ ] `release(mc): x.y.z` 提交的正文**列出本次包含的 note 路径**（三行内），让"为什么跳这一位"可查
