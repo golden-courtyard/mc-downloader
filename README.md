@@ -30,6 +30,8 @@ neoforge    = "https://<你的源>"
 配置文件放哪：`--config <路径>`，或平台配置目录（`mc-downloader --print-config` 会告诉你它读的是哪个）。
 **`fetch <url>` 不需要源** —— 你给地址，它只做传输。
 
+不知道六个键各自该填到哪一层、官方端点在哪？见 [docs/user/sources.md](docs/user/sources.md)。
+
 ### 1. 下一个文件（最常用）
 
 ```bash

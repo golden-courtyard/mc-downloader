@@ -70,6 +70,8 @@ Error: 未配置下载源（[source].metadata）。
 查找顺序：`--config <路径>` > 环境变量 `MC_DOWNLOADER_CONFIG` > 上面那张表的平台默认（**只有文件存在时才用**）。
 **不读当前目录下的 `config.toml`** —— “在 CWD 放一个就生效”是很多工具的陷阱，也是难排查的一类问题。
 
+不知道这六个键各自该填什么、官方端点在哪、怎么验证填对了没有 → [sources.md](sources.md)。
+
 不确定读的是哪个？`mc-downloader --print-config` 会把它**找过的路径**、哪个存在、每个键的生效值与来源层全部打印出来。
 
 配置文件里这么写（`--config <path>`，或放到平台配置目录）：

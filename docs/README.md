@@ -6,7 +6,8 @@
 |---|---|
 | 装好它、把游戏目录搞对 | [README](../README.md)（五分钟上手） |
 | 查某个参数/配置键的准确含义 | [user/usage.md](user/usage.md) |
-| 配 `[source]`（**必须先做，否则 `vanilla`/`run`/`pack` 都不动**） | [user/usage.md](user/usage.md) 的「源：必须先自己配」 |
+| 配 `[source]`（**必须先做**） | [user/usage.md](user/usage.md) 的「源：必须先自己配」 |
+| 去哪拿官方源、每个键该填到哪一层、怎么验证 | [user/sources.md](user/sources.md) |
 | 出错了找原因 | [user/usage.md](user/usage.md) 的「出错了先看这三处」；仍不行看 [reports/](reports/) |
 | 改代码（构建、测试、提交门） | [CONTRIBUTING.md](../CONTRIBUTING.md) |
 | 改代码前不能踩什么（铁律、坑、判据） | [AGENTS.md](../AGENTS.md) |
@@ -20,13 +21,14 @@
 | 测试设施（云服务器 / Kali / Docker） | [dev/testing-infrastructure.md](dev/testing-infrastructure.md) |
 | 攻防靶场（只打自己的靶） | [dev/attack-defense-lab.md](dev/attack-defense-lab.md) |
 | 网络故障实测记录 | [reports/net_faults-report-20261021.md](reports/net_faults-report-20261021.md) |
+| 程序能读不能写 / 权限报错不指向真正原因 | [dev/troubleshooting.md](dev/troubleshooting.md) |
 
 ## 目录
 
 ```
 docs/
   user/        给使用者的：怎么用、参数含义、排错
-  dev/         给维护者的：发布流程、测试设施
+  dev/         给维护者的：发布流程、测试设施、环境排查
   design/      架构（architecture.md）与已完稿的任务书归档（archive/）
   reports/     实验与审查产物（定量报告、攻击面、平台能力、代码审查）
 ```
