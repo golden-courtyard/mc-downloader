@@ -27,6 +27,8 @@ forge_maven = "https://<你的源>"
 neoforge    = "https://<你的源>"
 ```
 
+不想手写？`mc-downloader init` 会建好平台配置目录并写入带注释的模板（Windows：`%APPDATA%\mc-downloader\config.toml`；Linux/macOS：`~/.config/mc-downloader/config.toml`），再把六个键填上即可。
+
 配置文件放哪：`--config <路径>`，或平台配置目录（`mc-downloader --print-config` 会告诉你它读的是哪个）。
 **`fetch <url>` 不需要源** —— 你给地址，它只做传输。
 

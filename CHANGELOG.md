@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 新子命令 `mc-downloader init`：建好平台配置目录（Windows `%APPDATA%\mc-downloader\`，Linux/macOS `~/.config/mc-downloader/`）并写入带注释的配置模板；六项源留空（工具不内置源）。
+  已存在时默认不覆盖，`--force` 才覆盖；`--dir` 可指定别处。
+
 （下一次发布前的新增改动记在这里；发布时整体改标题为 `[x.y.z] - YYYY-MM-DD`，内容不洗。）
 
 版本号怎么跳、标签长什么样，见 [docs/dev/versioning.md](docs/dev/versioning.md)。

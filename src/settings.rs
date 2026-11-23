@@ -190,6 +190,61 @@ pub fn default_path() -> Option<PathBuf> {
     }
 }
 
+/// 平台默认配置路径（`init` 决定"该往哪写"时用它；与 `search_paths` 的第二项同一个值）。
+pub fn default_config_path() -> Option<PathBuf> {
+    default_path()
+}
+
+/// `init` 写的配置模板。
+///
+/// **不含任何地址**（铁律 1）：六个键留空，注释只说明"这一键要指到哪一层"。
+/// 模板本身必须是一份**能解析的配置**（有测试守着），否则用户照着填完还得先排语法错。
+pub const CONFIG_TEMPLATE: &str = r#"# mc-downloader 配置
+#
+# 本工具不内置任何下载源：下面六个键都必须由你填写地址。
+#   每个键该指到哪一层：docs/user/sources.md
+# 只是下单个文件？那不需要这个文件：mc-downloader fetch <url> -d <dir>
+
+[source]
+
+# 版本清单 URL —— 完整地址，指向 version_manifest_v2.json 那一层
+metadata = ""
+
+# assets 基址（结尾不要 /）
+assets = ""
+
+# Fabric loader 元数据基址
+fabric = ""
+
+# Forge：promotions_slim.json 所在基址（要含 /net/minecraftforge/forge）
+forge_meta = ""
+
+# Forge：maven 基址（installer 与库都从这里取）
+forge_maven = ""
+
+# NeoForge：maven 基址（要含 /releases）
+neoforge = ""
+"#;
+
+/// 写配置模板。已存在且 `force == false` ⇒ 报错**并且不碰**原文件。
+pub fn write_template(path: &Path, force: bool) -> Result<()> {
+    if path.exists() && !force {
+        anyhow::bail!(
+            "配置文件已存在，没有改动：{}\n\x20 要覆盖就加 `--force`（会丢掉现有内容）。",
+            path.display()
+        );
+    }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("建配置目录失败: {}", parent.display()))?;
+    }
+    std::fs::write(path, CONFIG_TEMPLATE)
+        .with_context(|| format!("写配置文件失败: {}", path.display()))?;
+    Ok(())
+}
+
 /// 配置文件的**候选路径**（按查找顺序），给 `--print-config` 用来说明"它在哪找过"。
 ///
 /// 与 [`locate`] 的区别：`locate` 返回"实际读到的那个"（可能一个都没有）；
@@ -341,6 +396,60 @@ pub fn merge(layers: &[Layer<'_>], dflt: &DownloadOpts) -> Merged {
 
 #[cfg(test)]
 mod tests {
+
+    /// 模板必须**能解析**（否则用户照着填完还得先排语法错），且不含任何地址（铁律 1）。
+    #[test]
+    fn config_template_is_valid_and_has_no_urls() {
+        let parsed: Settings = toml::from_str(CONFIG_TEMPLATE).expect("模板本身必须能解析");
+        assert_eq!(parsed.source.metadata.as_deref(), Some(""));
+        for key in [
+            "metadata",
+            "assets",
+            "fabric",
+            "forge_meta",
+            "forge_maven",
+            "neoforge",
+        ] {
+            assert!(CONFIG_TEMPLATE.contains(key), "模板里缺 {key}");
+        }
+        for bad in ["http://", "https://"] {
+            assert!(
+                !CONFIG_TEMPLATE.contains(bad),
+                "模板里不许出现地址（铁律 1）：{bad}"
+            );
+        }
+    }
+
+    /// `write_template` 会建目录；已存在时不覆盖、加了 force 才覆盖。
+    #[test]
+    fn init_writes_template_and_refuses_to_clobber() {
+        let dir = std::env::temp_dir().join(format!(
+            "mcd-init-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let path = dir.join("nested").join("config.toml");
+        write_template(&path, false).expect("首次写入应成功");
+        assert!(path.exists(), "文件应已创建（含中间目录）");
+
+        // 已存在且不带 force ⇒ 报错，且原内容不变
+        std::fs::write(&path, "sentinel = 1\n").expect("先写一份标记内容");
+        let err = write_template(&path, false).expect_err("已存在时必须报错");
+        assert!(format!("{err}").contains("已存在"), "错误文案要说明已存在");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "sentinel = 1\n",
+            "不带 force 时不许改动原文件"
+        );
+
+        write_template(&path, true).expect("带 force 应覆盖成功");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), CONFIG_TEMPLATE);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     fn user(proxy: Option<&str>, piece: Option<usize>) -> Settings {

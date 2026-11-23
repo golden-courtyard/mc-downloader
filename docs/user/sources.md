@@ -17,6 +17,9 @@
 
 所以：**契约我们给准，地址请你按上游的权威来源自己填。**
 
+先跑 `mc-downloader init` 把模板放到平台配置目录（`%APPDATA%\mc-downloader\config.toml` 或 `~/.config/mc-downloader/config.toml`），
+再用下面这张表把六个键填上。
+
 ## 一、六个键各自必须指到哪一层（这是我们和你的契约）
 
 `[source]` 里的样子：

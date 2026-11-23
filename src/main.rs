@@ -71,6 +71,18 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// 生成配置模板（建好平台配置目录，写入六个空的 [source] 键）
+    ///
+    /// 本工具不内置任何源，所以第一次用之前必须有一份配置。这条命令只做一件事：
+    /// 把模板放到正确的位置，让"该改哪个文件"不再需要翻文档猜。
+    Init {
+        /// 写到指定目录（默认用平台配置目录）
+        #[arg(long, short)]
+        dir: Option<PathBuf>,
+        /// 已存在也覆盖（会丢掉现有内容）
+        #[arg(long)]
+        force: bool,
+    },
     /// 下载原版（client jar + libraries + assets）
     Vanilla {
         /// 版本 id，例如 1.20.1 / 26.3
@@ -224,6 +236,27 @@ async fn main() -> Result<()> {
         );
     };
     match cmd {
+        Cmd::Init { dir, force } => {
+            let path = match dir {
+                Some(d) => d.join("config.toml"),
+                None => crate::settings::default_config_path().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "拿不到平台配置目录（APPDATA / XDG_CONFIG_HOME / HOME 都没设）。\n\
+                         \x20 用 `--dir <目录>` 指定一个位置。"
+                    )
+                })?,
+            };
+            crate::settings::write_template(&path, force)?;
+            println!("写好了：{}", path.display());
+            println!();
+            println!("下一步：");
+            println!("  1) 填 [source] 的六个键 —— 每个键该指到哪一层见 docs/user/sources.md");
+            println!("  2) mc-downloader --print-config        # 确认它读的是这个文件");
+            println!("  3) mc-downloader vanilla 1.20.1 -d .minecraft");
+            println!();
+            println!("只想下单个文件？不用管这份配置：mc-downloader fetch <url> -d <dir>");
+            return Ok(());
+        }
         Cmd::Vanilla { version, dir } => {
             commands::vanilla::run(version, dir, &ctx).await?;
         }

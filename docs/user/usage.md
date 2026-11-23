@@ -64,6 +64,16 @@ Error: 未配置下载源（[source].metadata）。
 
 | 平台 | 路径 |
 |---|---|
+**先让它把模板放好**：`mc-downloader init`
+
+```bash
+mc-downloader init          # 建目录 + 写带注释的模板，打印落点与下一步
+mc-downloader init --dir .  # 写到指定目录（很少用）
+mc-downloader init --force  # 覆盖已有文件（会丢内容）
+```
+
+模板里六个键是空的 —— **本工具不内置源**，地址必须你自己填（[sources.md](sources.md)）。
+
 | Windows | `%APPDATA%\mc-downloader\config.toml`（本机实测：`C:\Users\<you>\AppData\Roaming\mc-downloader\config.toml`） |
 | Linux / macOS | `$XDG_CONFIG_HOME/mc-downloader/config.toml`，未设置则 `~/.config/mc-downloader/config.toml` |
 
