@@ -31,6 +31,31 @@ docs/reports/
 
 工具选型、R 离线文档怎么查、还有哪些包没用上：见 [`docs/dev/quant-toolbox.md`](../../docs/dev/quant-toolbox.md)。
 
+## 二·五、单个实验：三分离（数据 / 口径 / 运算）
+
+一个实验一个目录，四个文件各司其职：
+
+```
+scripts/quant/<experiment>/
+├── data.json        数据真源（实验问题、测量日期、raw 指针）
+├── config.json      口径与判据（单位、剔除规则、阈值）
+├── standardize.py   标准化：raw → out/tidy.csv（只换算与标记，不做统计）
+├── calc.R           运算：只读 tidy + config，输出 result.txt（PASS/FAIL）
+└── 说明.md          怎么跑、阈值变更史、已知坑
+```
+
+**为什么要分**：口径一旦混进数据，换个人就不知道 `mbps=481.36` 是 MB/s 还是 MiB/s；
+混进运算，就不知道那条 `FAIL` 是数据的问题还是阈值改了。
+分开之后，报告里"并发 16 以上不再涨"这句话才有东西可指 —— 数据在 tidy、阈值在 config、判定在 calc。
+
+**三条硬约定**：
+
+1. **raw 不改**（它是仪器产物）；换算与派生列一律由 `standardize.py` 生成到 `out/`。
+2. **阈值是配置，不是真理**；改了必须在 `说明.md` 的「阈值变更」里写为什么。
+3. **每条判据自己跑出 PASS/FAIL**，不许写"结果与预期基本符合"。
+
+样例：[`e1-throughput/`](e1-throughput/)（含一次真实的单位自检纠错记录）。
+
 ## 三、三步交付（缺一步就不算做完）
 
 ```bash

@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "experiment": "e1-throughput",
+
+  "_comment_units": "raw 的列名 mbps 是历史遗留；实测语义为 字节 / 1048576 / 秒（MiB/s）。这一条由 standardize.py 逐行验证，不符即整批判据作废。",
+  "units": {
+    "throughput": "MiB/s",
+    "time": "s"
+  },
+
+  "dropped_labels": ["floor-dd", "floor-net"],
+  "dropped_labels_reason": "这两组不是下载器行为（dd / curl 单连接），只用来标定链路上限",
+  "min_runs_per_group": 5,
+
+  "_comment_thresholds": "阈值是配置，不是真理；改了要在 说明.md 里写为什么改。",
+  "thresholds": {
+    "c8_over_c1": 1.5,
+    "c16_over_c4": 1.2,
+    "c64_over_c16": 0.95
+  }
+}

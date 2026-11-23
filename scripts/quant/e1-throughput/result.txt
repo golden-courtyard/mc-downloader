@@ -1,0 +1,16 @@
+e1-throughput result
+rows used = 36   groups = 1,4,8,16,32,64
+
+  conns    n    median MiB/s
+      1    6        235.17
+      4    6        302.59
+      8    6        257.44
+     16    6        290.14
+     32    6        190.49
+     64    6        110.02
+
+data/unit-check              PASS  mbps 与 bytes/1048576/secs 一致
+data/min-runs                PASS  每组至少 5 次
+parallel-gain(8 vs 1)        FAIL  c8/c1 = 1.095  (阈值 >= 1.50)
+c16-over-c4                  FAIL  c16/c4 = 0.959  (阈值 >= 1.20)
+c64-not-worse-than-c16       FAIL  c64/c16 = 0.379  (阈值 >= 0.95)

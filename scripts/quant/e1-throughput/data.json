@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "experiment": "e1-throughput",
+  "question": "并发从 1 提到 64，吞吐怎么变；16 之后还值不值得加",
+  "measured_at": "2026-10-21",
+  "raw": "../../raw/e1-kali.csv",
+  "raw_producer": "Kali 侧服务端 + 宿主侧 fetch（见 说明.md）",
+  "n_raw_rows": 42,
+  "note": "raw 是仪器产物，**不改**；换算与派生列一律由 standardize.py 生成到 out/tidy.csv"
+}
