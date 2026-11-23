@@ -5,6 +5,7 @@
 
 > 如果这个方向对你有用，可以 [请我喝杯奶茶](https://afdian.com/a/liumiaoqi)。
 
+
 > 注意：**使用前请读**：[免责声明与法律定位](#免责声明与法律定位)（文末）。
 > **一句话**：只把你给的地址上的**公开文件**搬到你指定的目录；不包含、不分发任何游戏内容；不提供破解或账号绕过。
 
@@ -363,3 +364,5 @@ MIT，见 [LICENSE](LICENSE)。
 [![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
 
 如果这个方向对你有用，可以 [请我喝杯奶茶](https://afdian.com/a/liumiaoqi)。
+
+- 社区友链 · [LINUX DO](https://linux.do/)
