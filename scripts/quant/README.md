@@ -29,6 +29,8 @@ docs/reports/
   figs/*.png               图
 ```
 
+工具选型、R 离线文档怎么查、还有哪些包没用上：见 [`docs/dev/quant-toolbox.md`](../../docs/dev/quant-toolbox.md)。
+
 ## 三、三步交付（缺一步就不算做完）
 
 ```bash
