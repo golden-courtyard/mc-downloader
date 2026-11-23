@@ -9,7 +9,7 @@
 |---|---|---|---|
 | **取数与清洗** | Python | `scripts/quant/*.py` | 抓 git / 起服务端 / 解析日志，标准库就够，跨平台 |
 | **统计与作图** | **R** | `scripts/quant/analysis/*.R` | 描述统计、bootstrap、混合效应、分位回归都是它的主场；`ggplot2` 出图无需手工调 |
-| **关键数字交叉验算** | **Wolfram** | `scripts/quant/analysis/*.wls` | 只用来"换个引擎把同一批数再算一遍"；不做主力 |
+| **解析对象与符号核验** | **Wolfram** | `scripts/quant/analysis/*.wls` | 传递函数/极点/稳定性/噪声增益、符号推导、精确与任意精度；"R 给数，Wolfram 给式" |
 | **成品** | Markdown | `docs/reports/*.md` | 报告与结论；图放 `docs/reports/figs/` |
 | **口径** | Markdown 表格 | 报告第一节 | 先写后测，事后不改判据 |
 
