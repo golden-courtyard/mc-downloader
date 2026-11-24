@@ -45,6 +45,25 @@
 - 进 CI 要装 elan、要缓存 toolchain，等于给发布链加一个新的失败面（CodeQL 那轮已经吃过"先推红再修"的亏）；
 - **再评估条件**：Mathlib 编译完成、且确需形式化需要分析学的结论（例如停滞检测的 `exp(-λW)`）时，再单独决定。
 
+## 还没形式化的：`exp(-λW)`（2026-11-24 摸底）
+
+结论：**能做，而且不长** —— 但缺的那块不是我们以为的那块。
+
+| 需要什么 | Mathlib 里有没有 | 证据 |
+|---|---|---|
+| 指数分布的**尾概率** `P(X > x) = exp(-(r*x))` | **有**（以 CDF 形式） | `Mathlib/Probability/Distributions/Exponential.lean:163` `cdf_expMeasure_eq : cdf (expMeasure r) x = if 0 ≤ x then 1 - exp (-(r * x)) else 0` |
+| **泊松过程**（"进展事件服从 Poisson"） | **完全没有** | `rg 'PoissonProcess|poissonProcess' Mathlib` → **0 命中**（只有 Poisson 求和公式、Poisson 核那类分析对象） |
+
+所以「停滞检测的误判概率 = `exp(-λW)`」这条路是：**假设**相邻进展的间隔独立同分布 `expMeasure λ`，
+再由 `cdf_expMeasure_eq` 取补，两三行就能证。**证不了的是"进展确实是泊松过程"** —— 那要靠建模，
+Mathlib 里没有这个对象，也不该由我们去造。
+
+### 教训：名字猜不到就去 grep 源码，别只 `#check`
+
+我一开始猜的是 `expMeasure_Ioi`、`expMeasure_Iic`，`#check` 全报 unknown，于是误以为"没有尾概率引理"。
+实际上 `cdf_expMeasure_eq` 就在那儿 —— **`#check` 只能验证你猜对的名字**，找不到不等于不存在。
+正确顺序：`rg -n 'expMeasure' .lake/packages/mathlib/Mathlib` → 看文件 → 再看引理。
+
 ## 已知的证明坑（写下来省下次的时间）
 
 1. `2 * climb m` 不是子项时，`rw [ih]` 会失败 —— 先 `rw [Nat.mul_add]` 把它拆出来；
