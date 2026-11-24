@@ -96,8 +96,14 @@ cargo 下一轮往里写 `dep-graph.part.bin` 时被拒 ⇒ `exit 101` + `error:
 **提交门**（本机状态，新克隆/换机器要装一次）：
 
 ```bash
-git config core.hooksPath .githooks      # 装了之后，暂存有 .rs 就跑 cargo fmt --check
+git config core.hooksPath .githooks      # 暂存有 .rs 就跑 cargo fmt --check；暂存有 .md 就查链接
 ```
+
+**文档里的相对路径必须留在仓内**：链接只认仓内相对路径（`scripts/check-md-links.py`）。
+`../../某个私有目录`、绝对路径一律判红 —— 判据不是"能不能打开"，而是"它有没有把本机目录结构写进公开历史"。
+钩子拦暂存的 `.md`，CI 再全仓跑一遍（`--no-verify` 绕不过）。
+
+**CI**：`.github/workflows/ci.yml` 跑四个 job
 
 **CI**：`.github/workflows/ci.yml` 跑四个 job —— `check`（ubuntu：fmt → shell 语法 → clippy → test → release build）、`check-windows`（发布物是 `.exe`，Windows 专属分支只能在这跑）、`msrv`（`toolchain: 1.99` + `--locked`，让 `rust-version` 不是一句注释）、以及测试条数下限（`0 tests` 与 passed 同外观，只能靠数量守）。
 

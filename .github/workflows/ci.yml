@@ -53,6 +53,9 @@ jobs:
 
       # issue #15：**不内置任何下载源**。除 docs/ 与 tests/ 外，src/ 里不该出现任何源地址。
       # 这条是机器判据 —— 少写一行注释不会被发现，多写一行硬编码却会被它抓住。
+      - name: Markdown links（断链 / 指向仓库外）
+        # 与 .githooks/pre-commit 同一份脚本：钩子能被 --no-verify 绕过，这里补一刀。
+        run: python3 scripts/check-md-links.py
       - name: No machine-specific paths in tracked files
         # 公开仓：文档与脚本里不许出现本机绝对路径（用户目录、本地盘符、私有课题目录）。
         # 只查这一组**具名**模式，避免误伤 src/pathsafe.rs 里当测试数据的 `C:\x`。
