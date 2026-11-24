@@ -10,6 +10,7 @@ def climb : Nat → Nat
   | m + 1 => climb m + (3 * m + 3)
 
 /-- 关键恒等式：`2 × 并发和 = 3·m·(m+1)`。
+（人话版推导与逐行对照见 `proofs/Aimd-说明.md`；这里只放形式化本体。）
 
 有了它，时间平均 = `climb m / (m+1)` = `3m/2`，即峰值 `2m` 的 75%。 -/
 theorem climb_closed (m : Nat) : 2 * climb m = 3 * m * (m + 1) := by
