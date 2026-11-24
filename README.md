@@ -361,6 +361,8 @@ MIT，见 [LICENSE](LICENSE)。
 代码、测试与文档在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 上以 AI 协作方式完成；
 决策理由记在 `.agents/notes/`，实验数据记在 `docs/reports/`。
 
+三条解析结论（4 KiB 对齐 / 退避上界 / AIMD 平均 75%）在 [proofs/](proofs/) 里用 **Lean 4 核心库**形式化，`lake build` 可查；这些是**关于模型的命题**，不是实测结论。
+
 [![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
 
 如果这个方向对你有用，可以 [请我喝杯奶茶](https://afdian.com/a/liumiaoqi)。

@@ -41,6 +41,7 @@ cargo clippy --all-targets --locked -- -D warnings   # ② lint（-D warnings = 
 cargo deny check                                    # ②b 依赖：许可证 / RustSec 公告 / 只从 crates.io 取
 CARGO_INCREMENTAL=0 cargo test --lib --locked        # ③ 单测（lib 当前 186 条）
 cargo build --release                               # ④ 产物：target/release/mc-downloader.exe
+pwsh scripts/check-lean.ps1                          # ⑤ 形式化命题（只有改过 proofs/ 才需要；不进 CI）
 ```
 
 **注意：提交前必须跑完 ①②③（改过 `Cargo.toml` 再加 ②b）**。这不是建议 —— **2026-10-25 曾因只跑「能编译 + 单测」而连续 5 次 CI 失败**：

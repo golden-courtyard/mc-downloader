@@ -1,0 +1,7 @@
+# 只依赖 Lean 核心库：**不**引入 Mathlib（为什么见 PROBE.md 与 docs/dev/quant-toolbox.md）。
+# 目标：把三条已发布的断言变成可检查的命题，而不是把整个分析学搬进来。
+name = "Proofs"
+defaultTargets = ["Proofs"]
+
+[[lean_lib]]
+name = "Proofs"
