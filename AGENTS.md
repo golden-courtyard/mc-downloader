@@ -99,8 +99,16 @@ cargo 下一轮往里写 `dep-graph.part.bin` 时被拒 ⇒ `exit 101` + `error:
 git config core.hooksPath .githooks      # 装了之后，暂存有 .rs 就跑 cargo fmt --check
 ```
 
-**CI**：`.github/workflows/ci.yml` 跑四个 job —— `check`（ubuntu：fmt → shell 语法 → clippy → test → release build）、`check-windows`（发布物是 `.exe`，Windows 专属分支只能在这跑）、`msrv`（`toolchain: 1.99` + `--locked`，让 `rust-version` 不是一句注释）、以及测试条数下限（`0 tests` 与 passed 同外观，只能靠数量守）。**推送后要真的看结果**（`gh run watch`），
-不要把"push 成功"当成"CI 通过"。
+**CI**：`.github/workflows/ci.yml` 跑四个 job —— `check`（ubuntu：fmt → shell 语法 → clippy → test → release build）、`check-windows`（发布物是 `.exe`，Windows 专属分支只能在这跑）、`msrv`（`toolchain: 1.99` + `--locked`，让 `rust-version` 不是一句注释）、以及测试条数下限（`0 tests` 与 passed 同外观，只能靠数量守）。
+
+**推送后不必阻塞**：`gh run watch` 会把人钉在终端前等 5 分钟，而 CI 跑在别人的机器上。规则改成两句话：
+
+- **不要当场等**：推完继续干活，需要结论时再 `gh run list` / `gh run view` 查；
+- **但必须回头看**：**"push 成功"不等于"CI 通过"**。2026-10-25 那次连续 5 次红，根源就是把"推上去了"当成"过了"；
+- **唯一必须当场等的是发版/标签类推送** —— Release 要出资产，那是交付物，不许盲发。
+
+**不进 CI 的东西**：`proofs/`（Lean 证明，本地 `scripts/check-lean.ps1`）与 Mathlib 的编译都不进 CI ——
+技术栈不同、本机编译一次 2.5 小时、而 CI 跑在别人机器上，加进来只是给主线添一个失败面。
 
 ---
 
