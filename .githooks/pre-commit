@@ -32,15 +32,11 @@ if [ -n "$STAGED_MD" ]; then
 fi
 
 
-# ② 本机路径：与 CI 的 `No machine-specific paths` 同一套模式，拦暂存区里的绝对路径。
-#    为什么放进钩子：这条规则我自己违反过（把带本机用户名的路径写进了 proofs/），而 CI 是最后一道。
+# ② 本机路径（公开仓不许）：与 CI 共用 scripts/check-machine-paths.sh。
 STAGED_ALL=$(git diff --cached --name-only --diff-filter=ACM | tr "\n" " " || true)
 if [ -n "$STAGED_ALL" ]; then
-    HITS=$(git grep -nE '[A-Za-z]:[\\/]Users[\\/][^<]|/Users/[A-Za-z][A-Za-z0-9._-]*/|C:[\\/]hub|lmq-mcd-target|Academic/(research|tools)' -- $STAGED_ALL ':!.githooks/pre-commit' 2>/dev/null || true)
-    if [ -n "$HITS" ]; then
-        echo ""
-        echo "[pre-commit] 发现本机路径（公开仓不许）："
-        echo "$HITS"
+    if ! bash scripts/check-machine-paths.sh $STAGED_ALL; then
+        echo "[pre-commit] 上面这些位置改成仓内相对路径或占位写法"
         exit 1
     fi
 fi
