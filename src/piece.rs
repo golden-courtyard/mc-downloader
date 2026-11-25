@@ -51,7 +51,11 @@ impl PieceTable {
         Self::with_conns(file_size, DEFAULT_CONNS)
     }
 
-    /// 按目标并发数切分：**让片数 ≥ conns**，使每个连接都有活干。
+    /// 按目标并发数切分：**让片数 ≥ conns（有条件）**，使每个连接都有活干。
+    ///
+    /// 条件：`文件 ≥ conns × MIN_PIECE`（1 MiB 下界）。小于这个门槛时片数会少于 conns ——
+    /// 例如 20 MiB 配 32 连接只切 20 片，多出的 12 个连接空转。这不是 bug，是 1 MiB 片下界的代价；
+    /// 契约的**带条件**版本在 `proofs/Proofs/Pieces.lean` 的 `total_ge_conns` 里被机检过。
     ///
     /// 旧实现是"先按文件大小切死（4 MB / 16 MB），再看片数够不够"，
     /// 结果 `download.rs` 里的 `min(piece_conns, n_pieces)` 会让片数成为并发上限的
@@ -273,6 +277,27 @@ impl PieceState {
 
 #[cfg(test)]
 mod tests {
+    /// 契约是**带条件**的：文件 ≥ conns × MIN_PIECE 才保证片数 ≥ conns。
+    /// 形式化版本见 `proofs/Proofs/Pieces.lean` 的 `total_ge_conns`。
+    #[test]
+    fn piece_count_meets_conns_only_when_file_is_large_enough() {
+        // 256 MiB 配 32 连接：8 MiB/片，落在 [1, 16] MiB 区间内 ⇒ 片数 = 32
+        let big = PieceTable::with_conns(256 * 1024 * 1024, 32);
+        assert!(
+            big.total() as usize >= 32,
+            "256 MiB × 32 连接应有 ≥32 片，实际 {}",
+            big.total()
+        );
+
+        // 反例：20 MiB 配 32 连接。20/32 < 1 MiB，被 MIN_PIECE 夹住 ⇒ 只有 20 片
+        let small = PieceTable::with_conns(20 * 1024 * 1024, 32);
+        assert_eq!(
+            small.total(),
+            20,
+            "20 MiB × 32 连接切出 20 片（每片夹到 1 MiB 下界）；这条测试就是防止有人把\"无条件\"写回注释"
+        );
+    }
+
     use super::*;
 
     #[test]

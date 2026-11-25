@@ -34,6 +34,7 @@
 | `Nat.mod_lt` / `Nat.mul_add` / `Nat.add_mul` / `Nat.mul_assoc` / `Nat.pow_succ` / `Nat.le.intro` | 可用 | 抖动上界与对齐证明靠它们 |
 | `omega` / `simp` / `rw` / `induction` / `obtain` / `decide` | 可用 | 本轮全部证明只用到这些 |
 | `Finset` | **无**（Mathlib） | 所以求和一律用 `List.sum`，不用 `Finset.sum` |
+| `Nat.div_ceil`（向上取整除法） | **无**（`rg` 与 `#check` 都没有） | 片数用 `(a + b - 1) / b` 自己写 |
 | `Nat.dvd_mul_of_dvd_left` | **无**（Mathlib） | 对齐用"存在商"表述，不用 `∣` 的引理 |
 | `Nat.ModEq` | **无** | 同上 |
 | `ring` / `norm_num` / `nlinarith` / `field_simp` | **无**（Mathlib） | 多项式整理只能靠 `Nat.mul_add` 一类重写 + `omega` |
@@ -63,6 +64,22 @@ Mathlib 里没有这个对象，也不该由我们去造。
 我一开始猜的是 `expMeasure_Ioi`、`expMeasure_Iic`，`#check` 全报 unknown，于是误以为"没有尾概率引理"。
 实际上 `cdf_expMeasure_eq` 就在那儿 —— **`#check` 只能验证你猜对的名字**，找不到不等于不存在。
 正确顺序：`rg -n 'expMeasure' .lake/packages/mathlib/Mathlib` → 看文件 → 再看引理。
+
+## Pieces：片切分的四条不变量（`Proofs/Pieces.lean`）
+
+把 `src/piece.rs` 的 `PieceTable::with_conns` / `range` 建模后证了四条：
+
+| 定理 | 内容 |
+|---|---|
+| `pieceSize_pos` | 片大小恒 > 0（否则除法无意义） |
+| `len_le_piece` | 每片长度 ≤ `pieceSize` |
+| `stop_le_fileSize` | 片不越界 |
+| `contiguous` | 相邻片首尾相接（前一片停点 = 后一片起点，或已到文件末尾） |
+| `total_ge_conns` | **带条件契约**：`file ≥ conns × MIN_PIECE` 时才有 `片数 ≥ conns` |
+
+第五条是核验的真正产出：实现里原来的注释把 "片数 ≥ conns" 写成了**无条件**承诺，而
+`MIN_PIECE = 1 MiB` 这个下界让它在小文件上不成立（20 MiB × 32 连接 → 20 片，12 个连接空转）。
+现在注释改成带条件的表述，并把反例写成了 Rust 单测 `piece_count_meets_conns_only_when_file_is_large_enough`。
 
 ## 已知的证明坑（写下来省下次的时间）
 
