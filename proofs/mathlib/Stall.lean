@@ -11,7 +11,7 @@ open MeasureTheory ProbabilityTheory
 与 R 的 `pexp(10, 0.25, lower.tail = FALSE)` 逐位一致。
 
 **本文件不由 `proofs/lakefile.toml` 构建** —— 它在已编好 Mathlib 的工程里检查：
-`cd E:\Users\lmq\lean-math\mathlib-probe && lake env lean Stall.lean`（约 2 分钟）。 -/
+把它拷进一个已编好 Mathlib 的工程，然后 `lake env lean Stall.lean`（约 2 分钟）。 -/
 theorem expMeasure_Ioi (r x : ℝ) (hr : 0 < r) (hx : 0 ≤ x) :
     expMeasure r (Set.Ioi x) = ENNReal.ofReal (Real.exp (-(r * x))) := by
   haveI := isProbabilityMeasure_expMeasure hr

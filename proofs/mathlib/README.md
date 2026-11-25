@@ -6,7 +6,7 @@
 ## 怎么检查
 
 ```powershell
-cd E:\Users\lmq\lean-math\mathlib-probe    # 已编好 Mathlib 的工程
+cd <一个已 lake build 过 Mathlib 的工程>
 # 把本目录的文件拷进去（或加 --root），然后：
 lake env lean McdStall.lean                # 约 2 分钟（import Mathlib 的冷启动）
 lake env lean McdAimd.lean

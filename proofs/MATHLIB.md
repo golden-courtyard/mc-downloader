@@ -89,7 +89,7 @@ theorem expMeasure_Ioi (r x : ℝ) (hr : 0 < r) (hx : 0 ≤ x) :
 ## 检查命令
 
 ```powershell
-cd E:\Users\lmq\lean-math\mathlib-probe
+cd <一个已 lake build 过 Mathlib 的工程>
 lake env lean Stall.lean      # 约 2 分钟（import Mathlib 冷启动）
 lake env lean McdAimd.lean    # ring 版 AIMD
 ```
