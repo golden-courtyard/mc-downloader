@@ -63,14 +63,33 @@ theorem climb_closed (m : Nat) : 2 * climb m = 3 * m * (m + 1) := by
 `mc-downloader/proofs/Proofs/Aimd.lean` 的 `climb_closed` 在 Mathlib 工程里被**同一句话**证掉了（`ring`）。
 它证明的是同一件事，只是不再需要 12 行洗牌。
 
-## 下一步（需要时再做）
+## 已经用 Mathlib 证掉的一条：停滞检测的尾概率
 
-停滞检测那条尾概率：`Mathlib.Probability.Distributions.Exponential` 里已有
+`proofs/mathlib/Stall.lean`（本仓库里的参考副本，**不由** `proofs/lakefile.toml` 构建）：
 
 ```lean
-cdf_expMeasure_eq {r : ℝ} (hr : 0 < r) (x : ℝ) :
-    cdf (expMeasure r) x = if 0 ≤ x then 1 - exp (-(r * x)) else 0
+theorem expMeasure_Ioi (r x : ℝ) (hr : 0 < r) (hx : 0 ≤ x) :
+    expMeasure r (Set.Ioi x) = ENNReal.ofReal (Real.exp (-(r * x)))
 ```
 
-把 `cdf` 取补成 `μ (Ioi x)` 还要跨几层 `Measure.real` / `ENNReal`，属于「要就做、不要就不做」的活。
-做的时候放在 Mathlib 工程里，不塞进 `proofs/`。
+证明路径：`ofReal_cdf`（`ENNReal.ofReal (cdf μ x) = μ (Iic x)`）→ `cdf_expMeasure_eq`
+→ `measure_compl` 取补 → `ENNReal.ofReal_sub` 收尾。本机实测 `lake env lean Stall.lean` **exit 0**。
+
+**三路一致**（同一个数，三个引擎）：
+
+| 来源 | 结果 |
+|---|---|
+| Lean 定理 | `exp (-(r*x))`，对任意 `r>0`、`x≥0` |
+| Wolfram `Integrate` | `E^(-(lam*w))` |
+| R `pexp(10, 0.25, lower.tail = FALSE)` | **0.082085** |
+
+**这条证明的假设**：相邻进展的间隔服从 `expMeasure r`（指数分布）。
+它**没有**证“进展是泊松过程” —— Mathlib 里没有点过程，那是建模选择，不是定理。
+
+## 检查命令
+
+```powershell
+cd E:\Users\lmq\lean-math\mathlib-probe
+lake env lean Stall.lean      # 约 2 分钟（import Mathlib 冷启动）
+lake env lean McdAimd.lean    # ring 版 AIMD
+```
