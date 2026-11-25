@@ -1,0 +1,76 @@
+# 用不用 Mathlib：一条权衡，不是一个立场
+
+先纠正一处措辞。之前写「不依赖 Mathlib」像是在夸自己，这是错的 —— **那是限制**，
+不是优点。Mathlib 已经在本机编好（见下），该用的时候就用。
+
+## 事实（2026-11-24 实测）
+
+| 项 | 数值 |
+|---|---|
+| Mathlib 从源码全编 | 约 2.5 小时（32 并发） |
+| 磁盘 | 13.26 GB |
+| 空跑 `lake build`（未改动） | 14.4 秒 |
+| **`import Mathlib` 的单文件检查** | **125 秒** |
+| 窄 import（`Mathlib.Analysis.SpecialFunctions.Exp`） | 17 秒 |
+
+## 用它能换来什么：AIMD 那条从 12 行变 5 行
+
+同一道题，两种写法。
+
+**核心库版**（`Proofs/Aimd.lean`，需要手动搬分配律 + `omega` 收尾）：
+
+```lean
+theorem climb_closed (m : Nat) : 2 * climb m = 3 * m * (m + 1) := by
+  induction m with
+  | zero => decide
+  | succ m ih =>
+      simp only [climb]
+      rw [Nat.mul_add, ih]
+      simp only [Nat.mul_add, Nat.add_mul, Nat.mul_comm, Nat.mul_left_comm]
+      omega
+```
+
+**Mathlib 版**（本机实测通过，`lake env lean McdAimd.lean` 退出码 0）：
+
+```lean
+theorem climb_closed (m : Nat) : 2 * climb m = 3 * m * (m + 1) := by
+  induction m with
+  | zero => simp [climb]
+  | succ m ih =>
+      simp only [climb]
+      rw [Nat.mul_add, ih]
+      ring
+```
+
+`ring` 一次收尾，不用猜该搬哪条分配律。**这就是那 2.5 小时买来的东西。**
+
+## 为什么不把它设成 `proofs/` 的依赖
+
+`proofs/` 的定位是「克隆下来十秒能验」。一旦 `lakefile.toml` 里写上 `require mathlib`：
+
+- 克隆者要下 + 编约 2.5 小时（Windows 上 `lake exe cache get` 还是坏的，见 `math.md`）；
+- 任何 `import Mathlib` 的文件，每次检查两分钟起。
+
+所以按**文件**决定，而不是按**项目**决定：
+
+| 场景 | 放哪 | 检查方式 |
+|---|---|---|
+| 纯算术不变量（片切分、退避上界、对齐） | `proofs/Proofs/*.lean`，只用核心库 | `lake build`，十秒 |
+| 需要 `ring` / 分析学 / 概率论的 | 单独的文件，`import Mathlib` | 在已编好 Mathlib 的工程里 `lake env lean <file>`，两分钟 |
+
+## 已经用上的一次
+
+`mc-downloader/proofs/Proofs/Aimd.lean` 的 `climb_closed` 在 Mathlib 工程里被**同一句话**证掉了（`ring`）。
+它证明的是同一件事，只是不再需要 12 行洗牌。
+
+## 下一步（需要时再做）
+
+停滞检测那条尾概率：`Mathlib.Probability.Distributions.Exponential` 里已有
+
+```lean
+cdf_expMeasure_eq {r : ℝ} (hr : 0 < r) (x : ℝ) :
+    cdf (expMeasure r) x = if 0 ≤ x then 1 - exp (-(r * x)) else 0
+```
+
+把 `cdf` 取补成 `μ (Ioi x)` 还要跨几层 `Measure.real` / `ENNReal`，属于「要就做、不要就不做」的活。
+做的时候放在 Mathlib 工程里，不塞进 `proofs/`。

@@ -361,7 +361,7 @@ MIT，见 [LICENSE](LICENSE)。
 代码、测试与文档在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 上以 AI 协作方式完成；
 决策理由记在 `.agents/notes/`，实验数据记在 `docs/reports/`。
 
-四条结论（4 KiB 对齐 / 退避上界 / AIMD 平均 75% / 片数与并发数契约）在 [proofs/](proofs/) 里用 **Lean 4 核心库**形式化，`lake build` 可查；这些是**关于模型的命题**，不是实测结论。
+四条结论（4 KiB 对齐 / 退避上界 / AIMD 平均 75% / 片数与并发数契约）在 [proofs/](proofs/) 里用 Lean 形式化，`lake build` 十秒可查；这些是**关于模型的命题**，不是实测结论。需要 `ring` / 分析学的写法见 [proofs/MATHLIB.md](proofs/MATHLIB.md)（本机 Mathlib 已编好，按文件选用）。
 
 [![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
 

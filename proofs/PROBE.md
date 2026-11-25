@@ -38,7 +38,7 @@
 | `Nat.dvd_mul_of_dvd_left` | **无**（Mathlib） | 对齐用"存在商"表述，不用 `∣` 的引理 |
 | `Nat.ModEq` | **无** | 同上 |
 | `ring` / `norm_num` / `nlinarith` / `field_simp` | **无**（Mathlib） | 多项式整理只能靠 `Nat.mul_add` 一类重写 + `omega` |
-| Mathlib | **在编**（2026-11-24 17:56 起 `lake` + 约 30 个 `lean` 进程） | 本轮不依赖它 |
+| Mathlib | **已编好**（2026-11-24，13.26 GB，空跑 14.4 s） | `ring`/`norm_num`/分析学可用；`import Mathlib` 每次冷启动约 125 s —— **按文件选用**，见 `MATHLIB.md` |
 
 ## 为什么不进 CI
 
