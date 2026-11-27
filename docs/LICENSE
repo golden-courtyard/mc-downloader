@@ -1,0 +1,16 @@
+# 文档许可（CC BY-NC-4.0）
+
+本目录下的**原创文档**（设计稿、决策记录、定量报告、复盘与说明文字）采用
+[Creative Commons Attribution-NonCommercial 4.0 International](https://creativecommons.org/licenses/by-nc/4.0/) 授权。
+
+简单说：
+
+- **可以**：阅读、引用、转载（须署名并给出链接）、在不含商业用途的前提下改编；
+- **不可以**：用于商业目的；不得暗示原作者为你的用途背书；
+- **必须**：署名（建议写"作者：刘妙奇，来源：https://github.com/golden-courtyard/mc-downloader"）。
+
+不在此范围内：
+
+- 代码文件遵循仓库根的 [MIT](../LICENSE)；
+- 第三方材料（被引用的论文、标准、RFC 等）不随本仓授权，见 [THIRD_PARTY.md](../THIRD_PARTY.md)；
+- 图表中的原始数据若来自第三方，以该第三方的条款为准。

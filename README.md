@@ -1,5 +1,9 @@
 # mc-downloader
 
+> **个人工具，非通用下载器。** 为我自己的一套流程写的：可脚本化、结果可审计、失败能续。
+> 不面向第三方用户，不做 GUI，不与 PCL / aria2 / IDM 抢通用场景；
+> issue 只收我自己踩到的问题，讨论走 Discussions。
+
 > 把 Minecraft 相关文件放到正确位置：下载结果就是标准 `.minecraft` 目录结构，可被 PCL / 官方启动器 / HMCL 识别。
 > **下载源由你自己提供**（本工具不内置任何源，见下）。
 
@@ -352,7 +356,16 @@ cargo build --release        # 产物: target/release/mc-downloader.exe（需 Ru
 
 ## License
 
-MIT，见 [LICENSE](LICENSE)。
+本仓是混合内容，**按类分开授权**：
+
+| 内容 | 许可 | 说明 |
+|---|---|---|
+| 代码（Rust / R / Wolfram / Lean） | **MIT** | 见 [LICENSE](LICENSE) |
+| 原创文档（`docs/`、`.agents/notes/`、`proofs/` 的说明文字） | **CC BY-NC-4.0** | 可读、可引用、须署名，**不得商用**；见 [docs/LICENSE](docs/LICENSE) |
+| 第三方材料 | **不随本仓授权** | 引用片段归原权利人，清单与出处见 [THIRD_PARTY.md](THIRD_PARTY.md) |
+
+第三方材料的规则：只作研究与引用，不整篇转载；被引用的论文、标准、RFC
+按各自条款处理，本仓不替它们授权。
 
 ---
 
