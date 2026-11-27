@@ -361,7 +361,7 @@ cargo build --release        # 产物: target/release/mc-downloader.exe（需 Ru
 | 内容 | 许可 | 说明 |
 |---|---|---|
 | 代码（Rust / R / Wolfram / Lean） | **MIT** | 见 [LICENSE](LICENSE) |
-| 原创文档（`docs/`、`.agents/notes/`、`proofs/` 的说明文字） | **CC BY-NC-4.0** | 可读、可引用、须署名，**不得商用**；全文见 [LICENSE-DOCS](LICENSE-DOCS)，摘要见 [docs/LICENSE](docs/LICENSE) |
+| 原创文档（`docs/`、`.agents/notes/`、`proofs/` 的说明文字） | **CC BY-NC-4.0** | 可读、可引用、须署名，**不得商用**；全文见 [LICENSE-CC-BY-NC-4.0](LICENSE-CC-BY-NC-4.0)，摘要见 [docs/LICENSE](docs/LICENSE) |
 | 第三方材料 | **不随本仓授权** | 引用片段归原权利人，清单与出处见 [THIRD_PARTY.md](THIRD_PARTY.md) |
 
 第三方材料的规则：只作研究与引用，不整篇转载；被引用的论文、标准、RFC
