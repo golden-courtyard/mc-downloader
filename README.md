@@ -308,6 +308,8 @@ cargo build --release        # 产物: target/release/mc-downloader.exe（需 Ru
 
 **本工具属于通用下载工具，具有实质性非侵权用途。**
 
+> 安全问题（路径穿越、任意写、依赖投毒之类）请走 [私密漏洞报告](https://github.com/golden-courtyard/mc-downloader/security/advisories/new)，范围与响应方式见 [SECURITY.md](SECURITY.md)；这一节讲的是法律定位，不是安全披露。
+
 它只做三件事：
 
 1. 从**你在 `[source]` 里配置的地址**下载 Minecraft 的**公开可访问**文件（原版清单、assets、加载器 profile/库）；

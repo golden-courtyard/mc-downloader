@@ -11,7 +11,7 @@
 | **Bug 报告**（有复现命令、版本、预期与实际） | 收 | [Discussions](https://github.com/golden-courtyard/mc-downloader/discussions) |
 | **使用问题**（怎么配源、报错看不懂） | 尽量答 | Discussions |
 | **功能建议** | **不收 PR**；可在 Discussions 里说，作者自行判断 | Discussions |
-| **安全类问题** | 走私密渠道，不要开公开讨论 | 见 README 的「免责声明与法律定位」 |
+| **安全类问题** | 走私密渠道，不要开公开讨论 | [SECURITY.md](SECURITY.md)（GitHub 私密漏洞报告） |
 | **直接发 PR** | 只在作者明确要求时可以 | — |
 
 理由很简单：个人工具的维护成本全部由作者承担，**每一个被接受的功能都会变成长期义务**。
